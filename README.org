@@ -2,7 +2,35 @@
 
 A git repository registration service and resolver.
 
-* design
+* Background
+What if I could run =git share= in a repository to tell the world that I had a copy of a
+git repository available somewhere? Using the first commit hash of a repo as a unique ID
+for that repository (multi-parent aside) resolution to individual copies is the achieved
+via a many-to-one mapping from the first commit hash to registered remotes.
+
+=git share --all= could also automatically include all remotes in a =.git/config= as well.
+
+Ids like =git:e6cf3a391686a0b49171b9b195da88e81125bb1e= can be resolved directly,
+but there are no guarantees that the target repo will be up to date.
+
+Using this mapping, a PID like
+=git:e6cf3a391686a0b49171b9b195da88e81125bb1e:e6cf3a391686a0b49171b9b195da88e81125bb1e=
+can be resolved easily if registered remotes have native support for commit resolution,
+or at the very least can respond yes or to the question "Do you have a commit with this
+hash?" In theory multiple sites could run instrumented repositories to enable this, and
+in theory a registry could store the trees of hashes up to the point when =git share= is
+run, perhaps as =git share --trees=.
+
+The behavior of =share= could be configured as part of the global git config, of greatest
+interest would be configuring which registries to use.
+
+Automated metadata extraction to construct persistable metadata from a git repository is
+another potential part of this. One complain about using bare git hashes is that there
+isn't any metadata associated with them to provide context for/information about their
+referent. In many cases this could be automatically extracted to provide more 'PIDness'
+for the pure hash identifiers.
+
+* Design
 ** endpoints
 *** =/sexp=
 port 80 endpoint that accepts sexps and nothing else
@@ -25,7 +53,7 @@ in theory we can resolve shortened fragments until things become ambiguous
 **** =/git/{first-commit}/{ref}=
 in theory we can resolve shortened fragments until things become ambiguous
 **** =/git?first-commit={first-commit}&ref={ref}=
-* code
+* Code
 #+name: project-name-base
 : git-get
 
@@ -46,7 +74,7 @@ in theory we can resolve shortened fragments until things become ambiguous
 
 #+call: def-project-name-base()
 
-** sql
+** SQL
 :PROPERTIES:
 :header-args:sql: :mkdirp yes
 :END:
@@ -160,6 +188,21 @@ CREATE SCHEMA IF NOT EXISTS <<schema-name()>>;
 CREATE TABLE first_commits(
        first_commit_hash char(40) NOT NULL,
        git_remote_uri uri NOT NULL
+);
+
+CREATE TABLE remote_trees(
+       git_remote_uri uri NOT NULL,
+       -- tree NOT NULL -- TODO
+);
+
+CREATE TYPE mirror_type AS enum ('all', 'first-commits', 'none');
+CREATE TYPE mirror_mode_type AS enum ('push', 'pull', 'both');
+
+CREATE TABLE registries(
+       uri uri NOT NULL,
+       last_contact timestamp NOT NULL,
+       mirror mirror_type NOT NULL,
+       mode mirror_mode_type NOT NULL
 );
 #+end_src
 
