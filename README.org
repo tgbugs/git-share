@@ -1,4 +1,4 @@
-#+TITLE: git-get git repository resolver
+#+TITLE: git-share a git repository resolver
 
 A git repository registration service and resolver.
 
@@ -55,7 +55,7 @@ in theory we can resolve shortened fragments until things become ambiguous
 **** =/git?first-commit={first-commit}&ref={ref}=
 * Code
 #+name: project-name-base
-: git-get
+: git-share
 
 #+name: def-project-name-base
 #+header: :noweb yes :results none 
@@ -93,7 +93,7 @@ in theory we can resolve shortened fragments until things become ambiguous
 #+end_src
 
 #+RESULTS[8ba86f889109a1aff88d711f5861d4032f06c37f]: admin-name
-: git-get-admin
+: git-share-admin
 
 #+name: user-name
 #+begin_src elisp :cache yes
@@ -101,7 +101,7 @@ in theory we can resolve shortened fragments until things become ambiguous
 #+end_src
 
 #+RESULTS[9cb12f4b8e8d477d1889446e7dba3547bd391b5a]: user-name
-: git-get-user
+: git-share-user
 
 #+name: db-name
 #+begin_src elisp :cache yes
@@ -314,7 +314,7 @@ GRANT INSERT (first_commit_hash, git_remote_uri)
 
 *** test
 #+begin_src bash
-curl -X POST http://localhost:4242/git/asdfawefasdf120391203asdf?remote=https://github.com/tgbugs/git-get.git
+curl -X POST http://localhost:4242/git/asdfawefasdf120391203asdf?remote=https://github.com/tgbugs/git-share.git
 #+end_src
 
 #+begin_src lisp
@@ -326,10 +326,10 @@ curl -X POST http://localhost:4242/git/asdfawefasdf120391203asdf?remote=https://
 ** bash
 NOTE there can be more than one first commit
 #+begin_src bash
-function git-get-first-commit () {
+function git-share-first-commit () {
     git rev-list --max-parents=0 HEAD
 }
-function git-get-share () {
+function git-share-all () {
     git remote get-url --all origin
 }
 #+end_src
