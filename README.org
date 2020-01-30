@@ -1,0 +1,292 @@
+#+TITLE: git-get git repository resolver
+
+A git repository registration service and resolver.
+
+* design
+** endpoints
+*** =/sexp=
+port 80 endpoint that accepts sexps and nothing else
+no http semantics at all
+#+begin_src lisp :eval never
+(git first-commit-hash ref)
+#+end_src
+*** =/repo=
+**** =/repo/=
+**** =/repo/submit=
+
+**** =/resolve=
+**** =/resolve/{first-commit}=
+**** =/resolve/{first-commit}/{ref}=
+in theory we can resolve shortened fragments until things become ambiguous
+**** =/resolve?first-commit={first-commit}&ref={ref}=
+
+**** =/git=
+**** =/git/{first-commit}=
+**** =/git/{first-commit}/{ref}=
+in theory we can resolve shortened fragments until things become ambiguous
+**** =/git?first-commit={first-commit}&ref={ref}=
+* code
+#+name: project-name-base
+: git-get
+
+#+name: def-project-name-base
+#+header: :noweb yes :results none 
+#+begin_src emacs-lisp :exports none
+(defun project-name-base (suffix)
+  (format "%s-%s" "<<project-name-base()>>" suffix))
+(defun format-safe (string)
+  (replace-regexp-in-string
+    (regexp-quote "-")
+    "_"
+    string
+    nil 'literal))
+(defun project-db-name (suffix)
+  (format-safe (project-name-base suffix)))
+#+end_src
+
+#+call: def-project-name-base()
+
+** sql
+:PROPERTIES:
+:header-args:sql: :mkdirp yes
+:END:
+*** vars
+#+name: schema-name
+#+begin_src elisp :noweb yes :cache yes
+(format-safe "<<project-name-base()>>")
+#+end_src
+
+#+RESULTS[346c23dffaa690c07058f80420d409b41f7141d3]: schema-name
+: git_get
+
+#+name: admin-name
+#+begin_src elisp :cache yes
+(project-name-base "admin")
+#+end_src
+
+#+RESULTS[8ba86f889109a1aff88d711f5861d4032f06c37f]: admin-name
+: git-get-admin
+
+#+name: user-name
+#+begin_src elisp :cache yes
+(project-name-base "user")
+#+end_src
+
+#+RESULTS[9cb12f4b8e8d477d1889446e7dba3547bd391b5a]: user-name
+: git-get-user
+
+#+name: db-name
+#+begin_src elisp :cache yes
+(project-db-name "test")
+#+end_src
+
+#+RESULTS[acd020baa46c525cc73ac28cb909c63459f30a8e]:
+: git_get_test
+
+*** code
+:PROPERTIES:
+:CREATED:  [2020-01-29 Wed 16:51]
+:END:
+#+name: postgres
+#+header: :engine postgresql
+#+header: :dbhost localhost
+#+header: :dbuser postgres
+#+header: :database postgres
+#+header: :cmdline (format "-v database=%s" (project-db-name "test"))
+#+begin_src sql :noweb yes :tangle ./sql/postgres.sql
+DO
+$body$
+BEGIN
+    IF NOT EXISTS ( SELECT * FROM pg_catalog.pg_user
+        WHERE usename = '<<user-name()>>') THEN
+        CREATE ROLE "<<user-name()>>" LOGIN
+        NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE;
+    END IF;
+    IF NOT EXISTS ( SELECT * FROM pg_catalog.pg_user
+        WHERE usename = '<<admin-name()>>') THEN
+        CREATE ROLE "<<admin-name()>>" LOGIN
+        NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE;
+    END IF;
+END;
+$body$ language plpgsql;
+
+ALTER ROLE "<<admin-name()>>" SET search_path = <<schema-name()>>, public;
+ALTER ROLE "<<user-name()>>" SET search_path = <<schema-name()>>, public;
+
+DROP DATABASE IF EXISTS :database;
+
+CREATE DATABASE :database
+    WITH OWNER = '<<admin-name()>>'
+    ENCODING = 'UTF8'
+    TABLESPACE = pg_default
+    LC_COLLATE = 'en_US.UTF-8'  -- this was a gentoo locale issue check ${LANG}
+    LC_CTYPE = 'en_US.UTF-8'
+    CONNECTION LIMIT = -1;
+#+end_src
+
+The first time only set passwords and put them in [[file:~/.pgpass]].
+This requires interactive session, e.g. via =M-x sql-connect=.
+#+header: :dbuser postgres
+#+begin_src sql :eval-never
+\password <<user-name()>>
+\password <<admin-name()>>
+#+end_src
+
+#+name: extensions
+#+header: :engine postgresql
+#+header: :dbhost localhost
+#+header: :dbuser postgres
+#+header: :database (project-db-name "test")
+#+begin_src sql :noweb yes :tangle ./sql/extensions.sql
+CREATE EXTENSION uri;
+CREATE EXTENSION pgcrypto;
+#+end_src
+
+#+name: schemas
+#+header: :engine postgresql
+#+header: :dbhost localhost
+#+header: :dbuser (project-name-base "admin")
+#+header: :database (project-db-name "test")
+#+begin_src sql :noweb yes :tangle ./sql/schemas.sql
+CREATE SCHEMA IF NOT EXISTS <<schema-name()>>;
+#+end_src
+
+#+name: tables
+#+header: :engine postgresql
+#+header: :dbhost localhost
+#+header: :dbuser (project-name-base "admin")
+#+header: :database (project-db-name "test")
+#+begin_src sql :noweb yes :tangle ./sql/tables.sql
+CREATE TABLE first_commits(
+       first_commit_hash char(40) NOT NULL,
+       git_remote_uri uri NOT NULL
+);
+#+end_src
+
+#+name: permissions
+#+header: :engine   postgresql
+#+header: :dbhost   localhost
+#+header: :dbuser   (project-name-base "admin")
+#+header: :database (project-db-name "test")
+#+header: :cmdline  (format "-v database=%s" (project-db-name "test"))
+#+begin_src sql :noweb yes :tangle ./sql/permissions.sql
+GRANT CONNECT
+   ON DATABASE :database
+   TO "<<user-name()>>";
+
+GRANT USAGE
+   ON SCHEMA <<schema-name()>>
+   TO "<<user-name()>>";
+
+GRANT SELECT, INSERT
+   ON ALL TABLES IN SCHEMA <<schema-name()>>
+   TO "<<user-name()>>";  -- tables includes views
+
+GRANT USAGE
+   ON ALL SEQUENCES IN SCHEMA <<schema-name()>>
+   TO "<<user-name()>>";
+
+GRANT INSERT (first_commit_hash, git_remote_uri)
+   ON <<schema-name()>>.first_commits
+   TO "<<user-name()>>";
+#+end_src
+
+# annoyingly these call blocks all fail with weird bash errors
+# because things like (project-db-name "test") are not evaluated first
+#+call: postgres()
+#+call: extensions()
+#+call: schemas()
+#+call: tables()
+#+call: permissions()
+
+#+header: :shebang "#!/usr/bin/env bash" :mkdirp yes
+#+begin_src bash :noweb yes :tangle (format "./bin/%s" (project-name-base "db-setup"))
+# TODO sadly this is easier to do in bash
+#+end_src
+
+** cl
+#+begin_src lisp :noweb yes
+(ql:quickload :cl-who)
+(ql:quickload :hunchentoot)
+(ql:quickload :easy-routes)
+(ql:quickload :postmodern)
+(rename-package :postmodern :postmodern '(psql))
+
+ #+()
+(defparameter *db-connection* (psql:connect-toplevel
+                               "<<db-name()>>"
+                               "<<user-name()>>"
+                               "TODO-pgpass"
+                               "localhost"
+                               :port 5432))
+(defparameter *db-connection* (psql:connect-toplevel "<<db-name()>>" "<<user-name()>>" "ggu123" "localhost"))
+(defvar *acceptor* nil)
+
+ #+()
+(defun start-server ()
+  (stop-server)
+  (hunchentoot:start (setf *acceptor*
+               (make-instance 'hunchentoot:easy-acceptor
+                              :port 4242))))
+
+ #+()
+(hunchentoot:define-easy-handler (git :uri "/git") (first-commit)
+  (setf (hunchentoot:content-type*) "text/plain")
+  ;(format nil "Hey~@[ ~A~]!" first-commit)
+  (format nil "Hey ~a!" first-commit))
+
+(defun start-server ()
+  (stop-server)
+  (hunchentoot:start (setf *acceptor*
+               (make-instance 'easy-routes:routes-acceptor
+                              :port 4242))))
+
+(defun stop-server ()
+  (when *acceptor*
+    (when hunchentoot:started-p *acceptor*
+     (hunchentoot:stop *acceptor*))))
+
+(defun format-git-id (first-commit &optional (ref ""))
+  (format nil "Id: git:~a:~a" first-commit ref))
+
+(easy-routes:defroute post-git-fc ("/git/:first-commit" :method :post) (remote)
+  (setf (hunchentoot:content-type*) "text/plain")
+  ; if known remote pattern check for first commit
+  ; if config parameter set to check all clone and validate first commit
+  ; if everything checks out add remote and first commit to database
+  (psql:query (:insert-rows-into 'first_commits
+               :columns 'first_commit_hash 'git_remote_uri
+               :values (list (list first-commit remote))))
+  ; wow ... it just... works ...
+  (format nil "Register: git:~a -> ~a" first-commit remote))
+
+(easy-routes:defroute get-git-fc ("/git/:first-commit" :method :get) ()
+  (setf (hunchentoot:content-type*) "text/plain")
+  (format nil "Id: git:~a" first-commit))
+
+(easy-routes:defroute get-git-fc-ref ("/git/:first-commit/:ref" :method :get) ()
+  (setf (hunchentoot:content-type*) "text/plain")
+  (format-git-id first-commit ref))
+#+end_src
+
+*** test
+#+begin_src bash
+curl -X POST http://localhost:4242/git/asdfawefasdf120391203asdf?remote=https://github.com/tgbugs/git-get.git
+#+end_src
+
+#+begin_src lisp
+(psql:query "INSERT INTO first_commits (first_commit_hash, git_remote_uri)
+                    VALUES ('6d96945e85d4e949215910f13f3e620495b5e165',
+                            'https://github.com/tgbugs/pyontutils.git')")
+#+end_src
+
+** bash
+NOTE there can be more than one first commit
+#+begin_src bash
+function git-get-first-commit () {
+    git rev-list --max-parents=0 HEAD
+}
+function git-get-share () {
+    git remote get-url --all origin
+}
+#+end_src
