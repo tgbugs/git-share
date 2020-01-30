@@ -314,7 +314,14 @@ GRANT INSERT (first_commit_hash, git_remote_uri)
 
 *** test
 #+begin_src bash
-curl -X POST http://localhost:4242/git/asdfawefasdf120391203asdf?remote=https://github.com/tgbugs/git-share.git
+curl -X POST http://localhost:4242/git/e6cf3a391686a0b49171b9b195da88e81125bb1e?remote=https://github.com/tgbugs/git-share.git
+#+end_src
+
+#+RESULTS:
+: Register: git:e6cf3a391686a0b49171b9b195da88e81125bb1e -> https://github.com/tgbugs/git-share.git
+
+#+begin_src lisp
+(psql:query (:select '* :from 'first_commits))
 #+end_src
 
 #+begin_src lisp
@@ -332,4 +339,6 @@ function git-share-first-commit () {
 function git-share-all () {
     git remote get-url --all origin
 }
+# git-share-first-commit
+# git-share-all
 #+end_src
