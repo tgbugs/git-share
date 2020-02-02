@@ -1,6 +1,15 @@
 #+TITLE: git-share a git repository resolver
 
+#+name: project-description-short
+#+header: :results value drawer
+#+begin_src elisp :exports results :eval no-export
+"A git repository registration service and resolver."
+#+end_src
+
+#+RESULTS: project-description-short
+:results:
 A git repository registration service and resolver.
+:end:
 
 * Background
 What if I could run =git share= in a repository to tell the world that I had a copy of a
@@ -57,9 +66,17 @@ in theory we can resolve shortened fragments until things become ambiguous
 #+name: project-name-base
 : git-share
 
+# sigh, inconsistency between eval, tangle, and export
+#+name: project-name-safe
+: git_share
+
+** elisp
 #+name: def-project-name-base
 #+header: :noweb yes :results none 
 #+begin_src emacs-lisp :exports none
+(defun project-name (&optional suffix)
+  "project name without - separator"
+  (format "%s%s" "<<project-name-base()>>" (or suffix "")))
 (defun project-name-base (suffix)
   (format "%s-%s" "<<project-name-base()>>" suffix))
 (defun format-safe (string)
@@ -68,8 +85,8 @@ in theory we can resolve shortened fragments until things become ambiguous
     "_"
     string
     nil 'literal))
-(defun project-db-name (suffix)
-  (format-safe (project-name-base suffix)))
+(defun project-db-name ()
+  "<<db-name>>")
 #+end_src
 
 #+call: def-project-name-base()
@@ -79,37 +96,27 @@ in theory we can resolve shortened fragments until things become ambiguous
 :header-args:sql: :mkdirp yes
 :END:
 *** vars
+# :eval never is a hack around bad tangle behavior
 #+name: schema-name
-#+begin_src elisp :noweb yes :cache yes
-(format-safe "<<project-name-base()>>")
+#+begin_src org :noweb yes
+<<project-name-safe()>>
 #+end_src
-
-#+RESULTS[346c23dffaa690c07058f80420d409b41f7141d3]: schema-name
-: git_get
 
 #+name: admin-name
-#+begin_src elisp :cache yes
-(project-name-base "admin")
+#+begin_src org :noweb yes
+<<project-name-base()>>-admin
 #+end_src
-
-#+RESULTS[8ba86f889109a1aff88d711f5861d4032f06c37f]: admin-name
-: git-share-admin
 
 #+name: user-name
-#+begin_src elisp :cache yes
-(project-name-base "user")
+#+begin_src org :noweb yes
+<<project-name-base()>>-user
 #+end_src
 
-#+RESULTS[9cb12f4b8e8d477d1889446e7dba3547bd391b5a]: user-name
-: git-share-user
-
+# TODO Change this for production, and/or find a way to branch without export pain.
 #+name: db-name
-#+begin_src elisp :cache yes
-(project-db-name "test")
+#+begin_src org :noweb yes
+<<project-name-safe()>>_test
 #+end_src
-
-#+RESULTS[acd020baa46c525cc73ac28cb909c63459f30a8e]:
-: git_get_test
 
 *** code
 :PROPERTIES:
@@ -120,31 +127,31 @@ in theory we can resolve shortened fragments until things become ambiguous
 #+header: :dbhost localhost
 #+header: :dbuser postgres
 #+header: :database postgres
-#+header: :cmdline (format "-v database=%s" (project-db-name "test"))
+#+header: :cmdline (format "-v database=%s" (project-db-name))
 #+begin_src sql :noweb yes :tangle ./sql/postgres.sql
 DO
 $body$
 BEGIN
     IF NOT EXISTS ( SELECT * FROM pg_catalog.pg_user
-        WHERE usename = '<<user-name()>>') THEN
-        CREATE ROLE "<<user-name()>>" LOGIN
+        WHERE usename = '<<user-name>>') THEN
+        CREATE ROLE "<<user-name>>" LOGIN
         NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE;
     END IF;
     IF NOT EXISTS ( SELECT * FROM pg_catalog.pg_user
-        WHERE usename = '<<admin-name()>>') THEN
-        CREATE ROLE "<<admin-name()>>" LOGIN
+        WHERE usename = '<<admin-name>>') THEN
+        CREATE ROLE "<<admin-name>>" LOGIN
         NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE;
     END IF;
 END;
 $body$ language plpgsql;
 
-ALTER ROLE "<<admin-name()>>" SET search_path = <<schema-name()>>, public;
-ALTER ROLE "<<user-name()>>" SET search_path = <<schema-name()>>, public;
+ALTER ROLE "<<admin-name>>" SET search_path = <<schema-name>>, public;
+ALTER ROLE "<<user-name>>" SET search_path = <<schema-name>>, public;
 
 DROP DATABASE IF EXISTS :database;
 
 CREATE DATABASE :database
-    WITH OWNER = '<<admin-name()>>'
+    WITH OWNER = '<<admin-name>>'
     ENCODING = 'UTF8'
     TABLESPACE = pg_default
     LC_COLLATE = 'en_US.UTF-8'  -- this was a gentoo locale issue check ${LANG}
@@ -153,18 +160,50 @@ CREATE DATABASE :database
 #+end_src
 
 The first time only set passwords and put them in [[file:~/.pgpass]].
-This requires interactive session, e.g. via =M-x sql-connect=.
+This requires interactive session, e.g. via =M-x sql-postgres=.
+The [[psql-interactive][psql-interactive]] block below this example will
+launch the appropriate interactive session to set the passwords. Your user
+will need to have permission to login as =postgres= or you need to have set
+the postgres password in [[file:~/.pgpass]] e.g. via a line like
+=localhost:5432:*:postgres:the-pg-p4ssw0rd=.
+
 #+header: :dbuser postgres
-#+begin_src sql :eval-never
-\password <<user-name()>>
-\password <<admin-name()>>
+#+header: :database postgres
+#+begin_src sql :noweb yes :eval never
+\password <<admin-name>>
+\password <<user-name>>
+\quit
+#+end_src
+
+#+name: psql-interactive
+#+header: :results silent
+#+begin_src elisp :eval no-export :var this-org-buffer=(buffer-name (current-buffer))
+;; required to get the expected behavior when setting passwords
+;; otherwise the second prompt "Enter it again:" fails to match
+(when (not (string-match "it\\\\\|Response" comint-password-prompt-regexp))
+  (setq comint-password-prompt-regexp
+        (let ((sl (split-string comint-password-prompt-regexp "Response")))
+          (concat (car sl) "it\\|Response" (cadr sl)))))
+
+(setq sql-postgres-login-params
+      '((user :default "postgres")
+        (database :default "postgres")
+        (server :default "localhost")
+        (port :default 5432)))
+;; TODO this doesn't work due to how orb babel calls elisp NOT due to buffer confusion
+;; https://emacs.stackexchange.com/questions/42096/running-elisp-within-an-orgmode-code-block
+(let ((buffer (sql-postgres)))
+  (with-current-buffer (get-buffer this-org-buffer)
+    (split-window-below)
+    (windmove-down)
+    (switch-to-buffer buffer)))
 #+end_src
 
 #+name: extensions
 #+header: :engine postgresql
 #+header: :dbhost localhost
 #+header: :dbuser postgres
-#+header: :database (project-db-name "test")
+#+header: :database (project-db-name)
 #+begin_src sql :noweb yes :tangle ./sql/extensions.sql
 CREATE EXTENSION uri;
 CREATE EXTENSION pgcrypto;
@@ -174,24 +213,30 @@ CREATE EXTENSION pgcrypto;
 #+header: :engine postgresql
 #+header: :dbhost localhost
 #+header: :dbuser (project-name-base "admin")
-#+header: :database (project-db-name "test")
+#+header: :database (project-db-name)
 #+begin_src sql :noweb yes :tangle ./sql/schemas.sql
-CREATE SCHEMA IF NOT EXISTS <<schema-name()>>;
+CREATE SCHEMA IF NOT EXISTS <<schema-name>>;
 #+end_src
 
 #+name: tables
 #+header: :engine postgresql
 #+header: :dbhost localhost
 #+header: :dbuser (project-name-base "admin")
-#+header: :database (project-db-name "test")
+#+header: :database (project-db-name)
 #+begin_src sql :noweb yes :tangle ./sql/tables.sql
+-- wrap table creation in a transaction block to avoid partial failures along the way
+-- from resulting in future failures when tables already exist
+DO
+$body$
+BEGIN
+
 CREATE TABLE first_commits(
        first_commit_hash char(40) NOT NULL,
        git_remote_uri uri NOT NULL
 );
 
 CREATE TABLE remote_trees(
-       git_remote_uri uri NOT NULL,
+       git_remote_uri uri NOT NULL
        -- tree NOT NULL -- TODO
 );
 
@@ -204,43 +249,46 @@ CREATE TABLE registries(
        mirror mirror_type NOT NULL,
        mode mirror_mode_type NOT NULL
 );
+
+END;
+$body$ language plpgsql;
 #+end_src
 
 #+name: permissions
 #+header: :engine   postgresql
 #+header: :dbhost   localhost
 #+header: :dbuser   (project-name-base "admin")
-#+header: :database (project-db-name "test")
-#+header: :cmdline  (format "-v database=%s" (project-db-name "test"))
+#+header: :database (project-db-name)
+#+header: :cmdline  (format "-v database=%s" (project-db-name))
 #+begin_src sql :noweb yes :tangle ./sql/permissions.sql
 GRANT CONNECT
    ON DATABASE :database
-   TO "<<user-name()>>";
+   TO "<<user-name>>";
 
 GRANT USAGE
-   ON SCHEMA <<schema-name()>>
-   TO "<<user-name()>>";
+   ON SCHEMA <<schema-name>>
+   TO "<<user-name>>";
 
 GRANT SELECT, INSERT
-   ON ALL TABLES IN SCHEMA <<schema-name()>>
-   TO "<<user-name()>>";  -- tables includes views
+   ON ALL TABLES IN SCHEMA <<schema-name>>
+   TO "<<user-name>>";  -- tables includes views
 
 GRANT USAGE
-   ON ALL SEQUENCES IN SCHEMA <<schema-name()>>
-   TO "<<user-name()>>";
+   ON ALL SEQUENCES IN SCHEMA <<schema-name>>
+   TO "<<user-name>>";
 
 GRANT INSERT (first_commit_hash, git_remote_uri)
-   ON <<schema-name()>>.first_commits
-   TO "<<user-name()>>";
+   ON <<schema-name>>.first_commits
+   TO "<<user-name>>";
 #+end_src
 
 # annoyingly these call blocks all fail with weird bash errors
-# because things like (project-db-name "test") are not evaluated first
-#+call: postgres()
-#+call: extensions()
-#+call: schemas()
-#+call: tables()
-#+call: permissions()
+# because things like (project-db-name) are not evaluated first
+# #+call: postgres()
+# #+call: extensions()
+# #+call: schemas()
+# #+call: tables()
+# #+call: permissions()
 
 #+header: :shebang "#!/usr/bin/env bash" :mkdirp yes
 #+begin_src bash :noweb yes :tangle (format "./bin/%s" (project-name-base "db-setup"))
@@ -248,35 +296,66 @@ GRANT INSERT (first_commit_hash, git_remote_uri)
 #+end_src
 
 ** cl
+#+name: package.lisp
+#+begin_src lisp :noweb yes :tangle ./package.lisp
+(in-package :cl-user)
+(defpackage :<<project-name-base()>>
+  (:use
+   #:cl
+   #:cl-who
+   #:hunchnetoot
+   #:easy-routes
+   #:postmodern))
+(in-package :<<project-name-base()>>)
+(rename-package :postmodern :postmodern '(psql))
+#+end_src
+
+#+name: project-asd
+#+begin_src lisp :noweb yes :tangle (format "./%s" (project-name ".asd"))
+(in-package :cl-user)
+(defpackage :<<project-name-base()>>-asd
+  (:use #:cl #:asdf))
+(in-package :<<project-name-base()>>-asd)
+
+(defsystem :<<project-name-base()>>
+  :version "0.0.1"
+  :author "Tom Gillespie <tgbugs@gmail.com>"
+  :license "GPL2"  ; match the git license need to check compat with other things here
+  :description <<project-description-short>>
+  :serial t  ; needed so that packages loads before the others
+  :components ((:file "package")
+               (:file "TODO")
+               (:file "TODO")))
+
+(defsystem :<<project-name-base()>>-test
+  :depends-on (:<<project-name-base()>>)
+  :components ((:module "test"
+                        :serial t
+                        :components ((:file "package")
+                                     (:file "tests")))))
+
+#+end_src
+
 #+begin_src lisp :noweb yes
+ #+()(
 (ql:quickload :cl-who)
 (ql:quickload :hunchentoot)
 (ql:quickload :easy-routes)
 (ql:quickload :postmodern)
 (rename-package :postmodern :postmodern '(psql))
+)
+ #+()
+(in-package :<<project-name-base()>>)
 
  #+()
 (defparameter *db-connection* (psql:connect-toplevel
-                               "<<db-name()>>"
-                               "<<user-name()>>"
+                               <<db-name>>
+                               "<<user-name>>"
                                "TODO-pgpass"
                                "localhost"
                                :port 5432))
-(defparameter *db-connection* (psql:connect-toplevel "<<db-name()>>" "<<user-name()>>" "ggu123" "localhost"))
+(defparameter *db-connection* (psql:connect-toplevel "<<db-name>>" "<<user-name>>" "gsu123" "localhost"))
 (defvar *acceptor* nil)
-
- #+()
-(defun start-server ()
-  (stop-server)
-  (hunchentoot:start (setf *acceptor*
-               (make-instance 'hunchentoot:easy-acceptor
-                              :port 4242))))
-
- #+()
-(hunchentoot:define-easy-handler (git :uri "/git") (first-commit)
-  (setf (hunchentoot:content-type*) "text/plain")
-  ;(format nil "Hey~@[ ~A~]!" first-commit)
-  (format nil "Hey ~a!" first-commit))
 
 (defun start-server ()
   (stop-server)
@@ -292,6 +371,7 @@ GRANT INSERT (first_commit_hash, git_remote_uri)
 (defun format-git-id (first-commit &optional (ref ""))
   (format nil "Id: git:~a:~a" first-commit ref))
 
+;;; routes
 (easy-routes:defroute post-git-fc ("/git/:first-commit" :method :post) (remote)
   (setf (hunchentoot:content-type*) "text/plain")
   ; if known remote pattern check for first commit
@@ -305,7 +385,8 @@ GRANT INSERT (first_commit_hash, git_remote_uri)
 
 (easy-routes:defroute get-git-fc ("/git/:first-commit" :method :get) ()
   (setf (hunchentoot:content-type*) "text/plain")
-  (format nil "Id: git:~a" first-commit))
+  (let ((results (psql:query (:select 'git_remote_uri :from 'first_commits))))
+       (format nil "Id: git:~a -> ~a" first-commit results)))
 
 (easy-routes:defroute get-git-fc-ref ("/git/:first-commit/:ref" :method :get) ()
   (setf (hunchentoot:content-type*) "text/plain")
@@ -319,6 +400,15 @@ curl -X POST http://localhost:4242/git/e6cf3a391686a0b49171b9b195da88e81125bb1e?
 
 #+RESULTS:
 : Register: git:e6cf3a391686a0b49171b9b195da88e81125bb1e -> https://github.com/tgbugs/git-share.git
+
+
+#+begin_src bash
+curl -X GET http://localhost:4242/git/e6cf3a391686a0b49171b9b195da88e81125bb1e
+#+end_src
+
+#+RESULTS:
+| Id:                                        | git:e6cf3a391686a0b49171b9b195da88e81125bb1e | -> | ((https://github.com/tgbugs/git-share.git) |
+| (https://github.com/tgbugs/git-share.git)) |                                              |    |                                            |
 
 #+begin_src lisp
 (psql:query (:select '* :from 'first_commits))
