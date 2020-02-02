@@ -231,12 +231,14 @@ $body$
 BEGIN
 
 CREATE TABLE first_commits(
-       first_commit_hash char(40) NOT NULL,
-       git_remote_uri uri NOT NULL
+       first_commit char(40) NOT NULL,
+       -- git_remote_uri uri NOT NULL -- FIXME git@github.com:tgbugs/git-share.git breaks this
+       git_remote text NOT NULL,
+       CONSTRAINT pk__first_commits PRIMARY KEY (first_commit, git_remote)
 );
 
 CREATE TABLE remote_trees(
-       git_remote_uri uri NOT NULL
+       git_remote text NOT NULL
        -- tree NOT NULL -- TODO
 );
 
@@ -244,7 +246,7 @@ CREATE TYPE mirror_type AS enum ('all', 'first-commits', 'none');
 CREATE TYPE mirror_mode_type AS enum ('push', 'pull', 'both');
 
 CREATE TABLE registries(
-       uri uri NOT NULL,
+       uri text NOT NULL,
        last_contact timestamp NOT NULL,
        mirror mirror_type NOT NULL,
        mode mirror_mode_type NOT NULL
@@ -277,7 +279,7 @@ GRANT USAGE
    ON ALL SEQUENCES IN SCHEMA <<schema-name>>
    TO "<<user-name>>";
 
-GRANT INSERT (first_commit_hash, git_remote_uri)
+GRANT INSERT (first_commit, git_remote)
    ON <<schema-name>>.first_commits
    TO "<<user-name>>";
 #+end_src
@@ -299,15 +301,28 @@ GRANT INSERT (first_commit_hash, git_remote_uri)
 #+name: package.lisp
 #+begin_src lisp :noweb yes :tangle ./package.lisp
 (in-package :cl-user)
-(defpackage :<<project-name-base()>>
+(defpackage #:<<project-name-base()>>
   (:use
    #:cl
-   #:cl-who
-   #:hunchnetoot
-   #:easy-routes
-   #:postmodern))
-(in-package :<<project-name-base()>>)
-(rename-package :postmodern :postmodern '(psql))
+   ; reminder that deps do not go in :use
+   ;#:cl-who
+   ;#:hunchentoot
+   ;#:easy-routes
+   ;#:postmodern
+)
+  (:export #:server-start
+           #:server-stop
+)
+)
+
+(defpackage #:<<project-name-base()>>/daemon
+  (:use
+   #:cl
+   #:<<project-name-base()>>
+   ; reminder that deps do not go in :use
+   ;#:cl-daemonize
+   ;#:swank
+))
 #+end_src
 
 #+name: project-asd
@@ -322,12 +337,22 @@ GRANT INSERT (first_commit_hash, git_remote_uri)
   :author "Tom Gillespie <tgbugs@gmail.com>"
   :license "GPL2"  ; match the git license need to check compat with other things here
   :description <<project-description-short>>
+  :depends-on ("cl-who"
+               "hunchentoot"
+               "easy-routes"
+               "postmodern")
   :serial t  ; needed so that packages loads before the others
   :components ((:file "package")
-               (:file "TODO")
-               (:file "TODO")))
+               (:file "core")))
 
-(defsystem :<<project-name-base()>>-test
+(defsystem :<<project-name-base()>>/daemon
+  :depends-on (:<<project-name-base()>>
+               "cl-daemonize"
+               "swank")
+  ;;:components ((:file "daemon"))  ; explicitly don't load the file since it is a script
+)
+
+(defsystem :<<project-name-base()>>/test
   :depends-on (:<<project-name-base()>>)
   :components ((:module "test"
                         :serial t
@@ -336,18 +361,147 @@ GRANT INSERT (first_commit_hash, git_remote_uri)
 
 #+end_src
 
-#+begin_src lisp :noweb yes
- #+()(
-(ql:quickload :cl-who)
-(ql:quickload :hunchentoot)
-(ql:quickload :easy-routes)
-(ql:quickload :postmodern)
-(rename-package :postmodern :postmodern '(psql))
-)
- #+()
-(in-package :<<project-name-base()>>)
+#+name: parse-args-cli
+#+begin_src lisp
+(defun pk (element)
+  (when (not (listp element))
+    (error (format nil "~s not a list!" element)))
+  (let* ((kw (car element))
+         (sl (string-downcase (symbol-name kw)))
+         (assign (cdr element))  ; FIXME default?
+         ;;(real-assign (if assign (car assign) (intern (symbol-name kw))))
+         (real-assign (intern (symbol-name kw)))
+         (default (if assign (car assign) assign)) ; FIXME
+         (p (if assign
+                `(progn (setq ,real-assign (cadr args)) (setq args (cddr args)))
+                `(progn (setq ,real-assign t) (setq args (cdr args))))))
+    (list `(,real-assign ,default)
+          `(,(intern (format nil "--~a" sl)) ,p)
+          `(cons ',real-assign ,real-assign))))
 
- #+()
+(defmacro parse-args (&body keywords)
+  "(parse-args (:port port) (:pid pid) (:flag))"
+  ;;(print (apply #'mapcar #'list (map 'list #'pk keywords)))
+  ;;(format *standard-output* "~s~%" keywords)
+  ;;`(,@keywords)
+  `(quote ,keywords)
+  (destructuring-bind (defaults cases returns)
+      (apply #'mapcar #'list (map 'list #'pk keywords))
+    `(let ((args (cdr sb-ext:*posix-argv*))
+           ,@defaults)
+       (do ()
+           ((null args) nil)
+         (case (intern (car args))
+           ,@cases
+           (otherwise (progn (format *standard-output* "unhandled: ~s~%" (car args))
+                             (setq args (cdr args))))))
+       (list ,@returns))))
+#+end_src
+
+#+header: :shebang "#!/usr/bin/sbcl --script" :tangle-mode (identity #o0755)
+#+begin_src lisp :noweb yes :tangle ./test
+<<parse-args-cli>>
+(format *standard-output* "~s~%" sb-ext:*posix-argv*)
+(format *standard-output* "~s~%" (parse-args (:qq nil)
+                                             (:port 4242)
+                                             (:pid "/tmp/<<project-name-base()>>.pid")
+                                             (:flag)))
+#+end_src
+
+#+begin_src lisp :exports none :eval never
+'
+(let ((args (cdr sb-ext:*posix-argv*))
+      (port 4242)
+      (pid  "/run/asdf/pid"))
+
+  (do ()
+      ((null args) nil)
+    (case (intern (car args))
+      (|--port| (progn (setq port (cadr args))
+                       (setq args (cddr args))))
+      (|--pid| (progn (setq pid (cadr args))
+                      (setq args (cddr args))))
+      (otherwise (progn (format *standard-output* "unhandled: ~s~%" (car args))
+                        (setq args (cdr args))))))
+  (print (list port pid)))
+#+end_src
+
+#+header: :shebang "#!/usr/bin/sbcl --script"
+#+header: :tangle-mode (identity #o0755)
+#+begin_src lisp :noweb yes :tangle "./daemon.lisp"
+#-quicklisp
+(let ((quicklisp-init (merge-pathnames "code/lisp/quicklisp/setup.lisp"
+                                       (user-homedir-pathname))))
+  (when (probe-file quicklisp-init)
+    (load quicklisp-init)))
+
+;(require 'uiop)
+;(require 'asdf)
+
+(push (uiop:truenamize #p"~/git/NOFORK/cl-daemonize") ql:*local-project-directories*)
+(push (uiop:truenamize #p"~/git/<<project-name-base()>>") ql:*local-project-directories*)
+(ql:quickload :<<project-name-base()>>/daemon)
+;(ql:quickload :<<project-name-base()>>)
+;(ql:quickload '(cl-daemonize swank))
+;(push (uiop:truenamize #p"~/git/<<project-name-base()>>") asdf:*central-registry*)
+;(asdf:load-system :<<project-name-base()>>/daemon)  ; fixme recursion surely
+
+;(load (uiop:truenamize "~/.emacs.d/elpa/slime-20191224.2328/swank-loader.lisp"))
+
+(in-package :<<project-name-base()>>/daemon)
+
+(defparameter *finished* nil)
+
+<<parse-args-cli>>
+
+(let ((args (parse-args (:port 4242)
+                        (:pid #p"/tmp/<<project-name-base()>>.pid")
+                        ;; FIXME apparently can't log into the git folder or something !?
+                        (:path-log-out #p"/tmp/debug-out.log")
+                        (:path-log-err #p"/tmp/debug-err.log"))))
+     (defparameter *port* (cdr (assoc 'port args)))
+     (defparameter *path-pid* (cdr (assoc 'pid args)))
+     (defparameter *path-log-out* (cdr (assoc 'path-log-out args)))
+     (defparameter *path-log-err* (cdr (assoc 'path-log-err args)))
+)
+
+(format *error-output* "~a ~a~%" *port* *path-pid*)
+(format *standard-output* "~a ~a~%" *port* *path-pid*)
+
+(cl-daemonize:daemonize :out *path-log-out* ;"output.log"
+                        :err *path-log-err* ;"error.log"
+                        :pid *path-pid*
+                        :stop (lambda (&rest args)
+                                (declare (ignore args))
+                                (setf *finished* t)))
+
+;(swank-loader:init)
+(swank:create-server :port 4006)
+(git-share:server-start :port *port*)
+
+(format *standard-output* "STARTED~%")
+(loop :do
+     (sleep 1)
+     (when *finished*
+       (format *standard-output* "DONE~%")
+       (git-share:server-stop)
+       (sb-ext:quit)))
+
+#+end_src
+
+#+begin_src lisp :noweb yes :tangle ./core.lisp
+#-(and)(
+        (ql:quickload :cl-who)
+        (ql:quickload :hunchentoot)
+        (ql:quickload :easy-routes)
+        (ql:quickload :postmodern)
+        (rename-package :postmodern :postmodern '(psql))
+        )
+(in-package :<<project-name-base()>>)
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (rename-package :postmodern :postmodern '(psql)))
+
+#-(and)
 (defparameter *db-connection* (psql:connect-toplevel
                                <<db-name>>
                                "<<user-name>>"
@@ -357,40 +511,103 @@ GRANT INSERT (first_commit_hash, git_remote_uri)
 (defparameter *db-connection* (psql:connect-toplevel "<<db-name>>" "<<user-name>>" "gsu123" "localhost"))
 (defvar *acceptor* nil)
 
-(defun start-server ()
-  (stop-server)
+(defun server-start (&key (port 4242))
+  (server-stop)
   (hunchentoot:start (setf *acceptor*
-               (make-instance 'easy-routes:routes-acceptor
-                              :port 4242))))
+                           (make-instance 'easy-routes:routes-acceptor
+                                          :port port))))
 
-(defun stop-server ()
+(defun server-stop ()
   (when *acceptor*
-    (when hunchentoot:started-p *acceptor*
-     (hunchentoot:stop *acceptor*))))
+    (when (hunchentoot:started-p *acceptor*)
+      (hunchentoot:stop *acceptor*))))
 
 (defun format-git-id (first-commit &optional (ref ""))
   (format nil "Id: git:~a:~a" first-commit ref))
 
+;;; queries
+(require 'cl-postgres-error)
+
+(defun query-insert-fc (first-commit git-remote)
+  (handler-bind
+      (
+       (cl-postgres-error:unique-violation (lambda (condition)
+                                            (declare (ignore condition))
+                                            (print "aaaaaaaaaaa 1")
+                                            ;(abort-web 200)
+                                            (setf (hunchentoot:return-code*) 200)
+                                            ;(invoke-restart 'continue)
+                                            (ignore-errors)
+                                            ;(invoke-restart 'abort)
+                                            (print "aaaaaaaaaaa 2")
+))
+       ;(cl-postgres-error:unique-violation (lambda (condition) (abort-web 200)))
+       ;(error (lambda (condition) (print "argh") (print condition) (error condition)))
+)
+    (psql:query (:insert-rows-into 'first_commits
+                          :columns 'first_commit 'git_remote
+                           :values (list (list first-commit git-remote))))))
+
+;; TODO (handler-bind (cl-postgres-error::* #'some-handler))
+(defun query-select-fc-remotes (first-commit)
+  (psql:query (:select 'git_remote
+                 :from 'first_commits
+                :where (:= 'first_commit first-commit))))
+
+(defun query-select-id-remotes (first-commit &optional ref)
+  ;; TODO
+  (query-select-fc-remotes first-commit))
+
+;;; helpers
+
+(defun abort-db (condition)
+  ;; TODO
+  (abort-web 500))
+
+(defun abort-web (&optional code)
+  (setf (hunchentoot:return-code*) code)
+  (hunchentoot:abort-request-handler))
+
+(defun parse-id (id)
+  (destructuring-bind (&optional type first-commit ref)
+      (uiop:split-string id :separator ":")
+      (format *standard-output* "~s ~s ~s" type first-commit ref)
+    (cond ((string= type "git")
+           (if ref  ; implies first-commit
+               (query-select-id-remotes first-commit ref)
+               (if (and first-commit (not (string= first-commit "")))
+                   (query-select-fc-remotes first-commit)
+                   (abort-web 404))))
+          (t (abort-web 404)))))
+
 ;;; routes
-(easy-routes:defroute post-git-fc ("/git/:first-commit" :method :post) (remote)
-  (setf (hunchentoot:content-type*) "text/plain")
-  ; if known remote pattern check for first commit
-  ; if config parameter set to check all clone and validate first commit
-  ; if everything checks out add remote and first commit to database
-  (psql:query (:insert-rows-into 'first_commits
-               :columns 'first_commit_hash 'git_remote_uri
-               :values (list (list first-commit remote))))
-  ; wow ... it just... works ...
-  (format nil "Register: git:~a -> ~a" first-commit remote))
+(easy-routes:defroute
+ post-git-fc ("/git/:first-commit" :method :post) (remote)
+ (setf (hunchentoot:content-type*) "text/plain")
+ ;; if known remote pattern check for first commit
+ ;; if config parameter set to check all clone and validate first commit
+ ;; if everything checks out add remote and first commit to database
+ (setf (hunchentoot:return-code*) 201)  ; 200 returns on unique constraint violation
+ (ignore-errors  ; WHY DO WE HAVE TO USE THIS !?!?!!
+ (query-insert-fc first-commit remote))
+ ;; wow ... it just... works ...
+ (format nil "Register: git:~a -> ~a" first-commit remote))
 
-(easy-routes:defroute get-git-fc ("/git/:first-commit" :method :get) ()
-  (setf (hunchentoot:content-type*) "text/plain")
-  (let ((results (psql:query (:select 'git_remote_uri :from 'first_commits))))
-       (format nil "Id: git:~a -> ~a" first-commit results)))
+(easy-routes:defroute get-resolve-id
+ ("/resolve/:id" :method :get) ()
+ (setf (hunchentoot:content-type*) "text/plain")
+ (format nil "Id ~a -> ~a" id (parse-id id)))
 
-(easy-routes:defroute get-git-fc-ref ("/git/:first-commit/:ref" :method :get) ()
-  (setf (hunchentoot:content-type*) "text/plain")
-  (format-git-id first-commit ref))
+(easy-routes:defroute get-git-fc
+ ("/git/:first-commit" :method :get) ()
+ (setf (hunchentoot:content-type*) "text/plain")
+ (let ((results (query-select-fc-remotes first-commit)))
+   (format nil "Id: git:~a -> ~a" first-commit results)))
+
+(easy-routes:defroute get-git-fc-ref
+ ("/git/:first-commit/:ref" :method :get) ()
+ (setf (hunchentoot:content-type*) "text/plain")
+ (format-git-id first-commit ref))
 #+end_src
 
 *** test
@@ -406,16 +623,12 @@ curl -X POST http://localhost:4242/git/e6cf3a391686a0b49171b9b195da88e81125bb1e?
 curl -X GET http://localhost:4242/git/e6cf3a391686a0b49171b9b195da88e81125bb1e
 #+end_src
 
-#+RESULTS:
-| Id:                                        | git:e6cf3a391686a0b49171b9b195da88e81125bb1e | -> | ((https://github.com/tgbugs/git-share.git) |
-| (https://github.com/tgbugs/git-share.git)) |                                              |    |                                            |
-
 #+begin_src lisp
 (psql:query (:select '* :from 'first_commits))
 #+end_src
 
 #+begin_src lisp
-(psql:query "INSERT INTO first_commits (first_commit_hash, git_remote_uri)
+(psql:query "INSERT INTO first_commits (first_commit, git_remote)
                     VALUES ('6d96945e85d4e949215910f13f3e620495b5e165',
                             'https://github.com/tgbugs/pyontutils.git')")
 #+end_src
@@ -424,7 +637,12 @@ curl -X GET http://localhost:4242/git/e6cf3a391686a0b49171b9b195da88e81125bb1e
 NOTE there can be more than one first commit
 #+begin_src bash
 function git-share-first-commit () {
-    git rev-list --max-parents=0 HEAD
+    FC=$(git rev-list --max-parents=0 HEAD)
+    for remote in $(git remote get-url --all origin); do
+        curl -X POST "http://localhost:4242/git/${FC}?remote=${remote}"
+    done
+    # TODO always push to the local git-share instance first (sigh c)
+    # and that will then deal with connecting to federated servers
 }
 function git-share-all () {
     git remote get-url --all origin
