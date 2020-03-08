@@ -90,6 +90,7 @@ in theory we can resolve shortened fragments until things become ambiguous
 #+end_src
 
 #+call: def-project-name-base()
+# FIXME this needs to be called before tangling can continue ... how safely ...
 
 ** SQL
 :PROPERTIES:
@@ -170,8 +171,8 @@ the postgres password in [[file:~/.pgpass]] e.g. via a line like
 #+header: :dbuser postgres
 #+header: :database postgres
 #+begin_src sql :noweb yes :eval never
-\password <<admin-name>>
-\password <<user-name>>
+\password '<<admin-name>>'
+\password '<<user-name>>'
 \quit
 #+end_src
 
@@ -197,6 +198,11 @@ the postgres password in [[file:~/.pgpass]] e.g. via a line like
     (split-window-below)
     (windmove-down)
     (switch-to-buffer buffer)))
+#+end_src
+
+#+begin_src bash
+layman -a tgbugs-overlay
+emerge pguri
 #+end_src
 
 #+name: extensions
@@ -298,6 +304,7 @@ GRANT INSERT (first_commit, git_remote)
 #+end_src
 
 ** cl
+*** packages
 #+name: package.lisp
 #+begin_src lisp :noweb yes :tangle ./package.lisp
 (in-package :cl-user)
@@ -345,12 +352,17 @@ GRANT INSERT (first_commit, git_remote)
   :components ((:file "package")
                (:file "core")))
 
+#+()
 (defsystem :<<project-name-base()>>/daemon
   :depends-on (:<<project-name-base()>>
                "cl-daemonize"
                "swank")
   ;;:components ((:file "daemon"))  ; explicitly don't load the file since it is a script
 )
+
+(defsystem :<<project-name-base()>>/small-start
+  :depends-on (:<<project-name-base()>>
+               "swank"))
 
 (defsystem :<<project-name-base()>>/test
   :depends-on (:<<project-name-base()>>)
@@ -360,9 +372,15 @@ GRANT INSERT (first_commit, git_remote)
                                      (:file "tests")))))
 
 #+end_src
-
+*** parse args
 #+name: parse-args-cli
 #+begin_src lisp
+(defun norm-arg (arg)
+  ; FIXME type decls here would help
+  ; FIXME parse-integer ignores leading zeros!
+  (let ((int (ignore-errors (parse-integer arg))))
+    (if int int arg)))
+
 (defun pk (element)
   (when (not (listp element))
     (error (format nil "~s not a list!" element)))
@@ -373,7 +391,7 @@ GRANT INSERT (first_commit, git_remote)
          (real-assign (intern (symbol-name kw)))
          (default (if assign (car assign) assign)) ; FIXME
          (p (if assign
-                `(progn (setq ,real-assign (cadr args)) (setq args (cddr args)))
+                `(progn (setq ,real-assign (norm-arg (cadr args))) (setq args (cddr args)))
                 `(progn (setq ,real-assign t) (setq args (cdr args))))))
     (list `(,real-assign ,default)
           `(,(intern (format nil "--~a" sl)) ,p)
@@ -399,7 +417,7 @@ GRANT INSERT (first_commit, git_remote)
 #+end_src
 
 #+header: :shebang "#!/usr/bin/sbcl --script" :tangle-mode (identity #o0755)
-#+begin_src lisp :noweb yes :tangle ./test
+#+begin_src lisp :noweb yes :tangle ./args-test :results output
 <<parse-args-cli>>
 (format *standard-output* "~s~%" sb-ext:*posix-argv*)
 (format *standard-output* "~s~%" (parse-args (:qq nil)
@@ -425,7 +443,9 @@ GRANT INSERT (first_commit, git_remote)
                         (setq args (cdr args))))))
   (print (list port pid)))
 #+end_src
-
+*** deployment
+**** daemon
+self daemonizing approach
 #+header: :shebang "#!/usr/bin/sbcl --script"
 #+header: :tangle-mode (identity #o0755)
 #+begin_src lisp :noweb yes :tangle "./daemon.lisp"
@@ -488,7 +508,209 @@ GRANT INSERT (first_commit, git_remote)
        (sb-ext:quit)))
 
 #+end_src
+**** SLaD
+So. Of all the many ways that one can try to package this thing to run
+this is the one that amuses me the most deeply. 15mb. Sure you need a
+copy of sbcl on the server, but still ... wow.
 
+Tangle and run build-image to create a core dump that can be loaded on another system.
+#+name: slad
+#+header: :shebang "#!/usr/bin/sbcl --script"
+#+header: :tangle-mode (identity #o0755)
+#+begin_src lisp :tangle ./build-image
+(load "bootstrap-image.lisp")
+(save-lisp-and-die "git-share-start-small" :toplevel #'main :executable t :compression t)
+#+end_src
+
+#+begin_src lisp :noweb yes :tangle ./bootstrap-image.lisp
+#-quicklisp
+(let ((quicklisp-init (merge-pathnames "code/lisp/quicklisp/setup.lisp"
+                                       (user-homedir-pathname))))
+  (when (probe-file quicklisp-init)
+    (load quicklisp-init)))
+
+(push (uiop:truenamize #p"~/git/<<project-name-base()>>") ql:*local-project-directories*)
+(ql:quickload :<<project-name-base()>>/small-start)
+
+(defparameter *finished* nil)
+
+<<parse-args-cli>>
+
+(defun main ()
+  (format t "~s~%" sb-ext:*posix-argv*)
+  (let* ((args (parse-args (:port 4242)
+                           (:pid #p"/tmp/<<project-name-base()>>.pid")
+                           (:port-swank 4006)))
+         (*port* (cdr (assoc 'port args)))
+         (*path-pid* (cdr (assoc 'pid args)))
+         (*port-swank* (cdr (assoc 'port-swank args))))
+    (swank:create-server :port *port-swank*)
+    (git-share:server-start :port *port*))
+
+  (format t "STARTED~%")
+  (loop :do
+       (sleep 5)
+       (when *finished*
+         (format t "DONE~%")
+         (git-share:server-stop)
+         (sb-ext:quit)))
+  )
+#+end_src
+
+It seems like =app-misc/detachtty= may be needed to get this to work.
+Or the eternal loop might work as well. Needs more testing.
+
+#+name: open-rc-init-script-slad
+#+begin_src bash :tangle ./git-share-slad.rc
+#!/sbin/openrc-run
+# Copyright 1999-2020 Gentoo Authors
+# Distributed under the terms of the GNU General Public License v2
+
+: ${LOG_LEVEL:=info}
+: ${SVCGROUP:=git-share}
+: ${SVCUSER:=git-share}
+: ${LOG_LOC:="/var/log/git-share"}
+
+run_dir=${run_dir:-/run}
+LOG="${LOG_LOC}/sysout.log"
+
+pidfile="${run_dir}/${SVCNAME}/pid"
+start_stop_daemon_args="
+--group ${SVCGROUP}
+--user ${SVCUSER}
+--wait 1000
+--env DOWENEEDENV=${SOMEENV}
+"
+command="/usr/bin/sbcl"
+command_args="--port ${PORT}
+--port-swank ${PORT_SWANK}"
+retry='TERM/30/KILL/5'
+
+command_owner="${SVCUSER}:${SVCGROUP}"
+
+depend() {
+    after net
+}
+
+start_pre() {
+    local OOPS=0
+    if [[ "${HRM_API}" == *"some-value"* ]] && [ -z "${HRM_KEY}" ]; then
+        eend 1 durn
+        OOPS=1
+    fi
+    if [ ${OOPS} -ne 0 ]; then
+        return 1
+    fi
+    checkpath --directory --owner ${command_owner} --mode 0775 "/run/${SVCNAME}"
+    checkpath --directory --owner ${command_owner} --mode 0775 "${LOG_LOC}"
+}
+#+end_src
+**** foreground
+Maybe a smaller version that uses openrc instead of self daemonizing
+to be a bit friendly/more interoperable with posix conventions?
+http://theatticlight.net/posts/A-Lisp-Daemon/
+https://www.darkchestnut.com/2016/daemonizing-common-lisp-services/
+https://www.reddit.com/r/Common_Lisp/comments/4n7ly6/daemonizing_common_lisp_services/
+
+#+name: small-start
+#+header: :shebang "#!/usr/bin/sbcl --script"
+#+header: :tangle-mode (identity #o0755)
+#+begin_src lisp :noweb yes :tangle ./small-start.lisp
+#-quicklisp
+(let ((quicklisp-init (merge-pathnames "code/lisp/quicklisp/setup.lisp"
+                                       (user-homedir-pathname))))
+  (when (probe-file quicklisp-init)
+    (load quicklisp-init)))
+
+(push (uiop:truenamize #p"~/git/<<project-name-base()>>") ql:*local-project-directories*)
+(ql:quickload :<<project-name-base()>>/small-start)
+
+<<parse-args-cli>>
+
+(let ((args (parse-args (:port 4242)
+                        (:pid #p"/tmp/<<project-name-base()>>.pid")
+                        ;; FIXME apparently can't log into the git folder or something !?
+                        ;;(:path-log-out #p"/tmp/debug-out.log")
+                        ;;(:path-log-err #p"/tmp/debug-err.log")
+                        ;; log to sysout in daemon for this one
+                        )))
+  (defparameter *port* (cdr (assoc 'port args)))
+  (defparameter *path-pid* (cdr (assoc 'pid args)))
+  (defparameter *path-log-out* (cdr (assoc 'path-log-out args)))
+  (defparameter *path-log-err* (cdr (assoc 'path-log-err args))))
+
+(defparameter *finished* nil)
+
+(swank:create-server :port 4006)
+(git-share:server-start :port *port*)
+
+(format *standard-output* "STARTED~%")
+(loop :do
+     (sleep 5)
+     (when *finished*
+       (format *standard-output* "DONE~%")
+       (git-share:server-stop)
+       (sb-ext:quit)))
+#+end_src
+
+#+name: open-rc-init-script
+#+begin_src bash :tangle ./git-share.rc
+#!/sbin/openrc-run
+# Copyright 1999-2020 Gentoo Authors
+# Distributed under the terms of the GNU General Public License v2
+
+: ${LOG_LEVEL:=info}
+: ${SVCGROUP:=git-share}
+: ${SVCUSER:=git-share}
+: ${LOG_LOC:="/var/log/git-share"}
+
+run_dir=${run_dir:-/run}
+LOG="${LOG_LOC}/${SVCNAME}.log"
+
+socket="unix:/run/${SVCNAME}/socket"
+
+pidfile="${run_dir}/${SVCNAME}/pid"
+start_stop_daemon_args="
+--group ${SVCGROUP}
+--user ${SVCUSER}
+--wait 1000
+--env DOWENEEDENV=${SOMEENV}
+"
+command="/usr/bin/sbcl"
+command_args="--bind ${socket}
+--port ${PORT}
+--pid ${pidfile}"
+retry='TERM/30/KILL/5'
+
+command_owner="${SVCUSER}:${SVCGROUP}"
+
+depend() {
+    after net
+}
+
+start_pre() {
+    OOPS=0
+    if [ -z "${SCIGRAPH_API}" ]; then
+        eend 1 "SCIGRAPH_API is not set in /etc/conf.d/${SVCNAME}"
+        OOPS=1
+    fi
+    if [[ "${SCIRGRAPH_API}" == *"scicrunch"* ]] && [ -z "${SCIGRAPH_API_KEY}" ]; then
+        eend 1 "SCIGRAPH_API requires SCIGRAPH_API_KEY not set in /etc/conf.d/${SVCNAME}"
+        OOPS=1
+    fi
+    if [ ${OOPS} -ne 0 ]; then
+        return 1
+    fi
+    checkpath --directory --owner ${command_owner} --mode 0775 "/run/${SVCNAME}"
+    checkpath --directory --owner ${command_owner} --mode 0775 "${LOG_LOC}"
+}
+#+end_src
+*** core
+Connection handling
+https://www.mail-archive.com/postmodern-devel@common-lisp.net/msg00348.html
+https://sites.google.com/site/sabraonthehill/postmodern-examples/postmodern-connections
+
+#+name: core
 #+begin_src lisp :noweb yes :tangle ./core.lisp
 #-(and)(
         (ql:quickload :cl-who)
@@ -502,13 +724,19 @@ GRANT INSERT (first_commit, git_remote)
   (rename-package :postmodern :postmodern '(psql)))
 
 #-(and)
-(defparameter *db-connection* (psql:connect-toplevel
+(defparameter *db-connection* (postmodern:connect-toplevel
                                <<db-name>>
                                "<<user-name>>"
                                "TODO-pgpass"
                                "localhost"
                                :port 5432))
-(defparameter *db-connection* (psql:connect-toplevel "<<db-name>>" "<<user-name>>" "gsu123" "localhost"))
+
+(defparameter *db-connection-parameters* '("<<db-name>>" "<<user-name>>" "gsu123" "localhost" :pooled-p t))
+
+(defmacro with-connection (&body body)
+  `(postmodern:with-connection *db-connection-parameters*
+     ,@body))
+
 (defvar *acceptor* nil)
 
 (defun server-start (&key (port 4242))
@@ -526,7 +754,7 @@ GRANT INSERT (first_commit, git_remote)
   (format nil "Id: git:~a:~a" first-commit ref))
 
 ;;; queries
-(require 'cl-postgres-error)
+;(require 'cl-postgres)  ; cl-postgres-error should already be pulled in by ql:quickload postmodern
 
 (defun query-insert-fc (first-commit git-remote)
   (handler-bind
@@ -544,19 +772,22 @@ GRANT INSERT (first_commit, git_remote)
        ;(cl-postgres-error:unique-violation (lambda (condition) (abort-web 200)))
        ;(error (lambda (condition) (print "argh") (print condition) (error condition)))
 )
-    (psql:query (:insert-rows-into 'first_commits
+    (with-connection
+    (postmodern:query (:insert-rows-into 'first_commits
                           :columns 'first_commit 'git_remote
-                           :values (list (list first-commit git-remote))))))
+                           :values (list (list first-commit git-remote)))))))
 
 ;; TODO (handler-bind (cl-postgres-error::* #'some-handler))
 (defun query-select-fc-remotes (first-commit)
-  (psql:query (:select 'git_remote
+  (with-connection
+  (postmodern:query (:select 'git_remote
                  :from 'first_commits
-                :where (:= 'first_commit first-commit))))
+                :where (:= 'first_commit first-commit)))))
 
 (defun query-select-id-remotes (first-commit &optional ref)
   ;; TODO
-  (query-select-fc-remotes first-commit))
+  (with-connection
+  (query-select-fc-remotes first-commit)))
 
 ;;; helpers
 
@@ -611,24 +842,75 @@ GRANT INSERT (first_commit, git_remote)
 #+end_src
 
 *** test
-#+begin_src bash
+#+begin_src bash :results drawer
 curl -X POST http://localhost:4242/git/e6cf3a391686a0b49171b9b195da88e81125bb1e?remote=https://github.com/tgbugs/git-share.git
 #+end_src
 
 #+RESULTS:
-: Register: git:e6cf3a391686a0b49171b9b195da88e81125bb1e -> https://github.com/tgbugs/git-share.git
+:results:
+Register: git:e6cf3a391686a0b49171b9b195da88e81125bb1e -> https://github.com/tgbugs/git-share.git
+:end:
 
-
-#+begin_src bash
+#+begin_src bash :results drawer
 curl -X GET http://localhost:4242/git/e6cf3a391686a0b49171b9b195da88e81125bb1e
 #+end_src
 
+#+RESULTS:
+:results:
+Id: git:e6cf3a391686a0b49171b9b195da88e81125bb1e -> ((git@github.com:tgbugs/git-share.git)
+                                                     (https://github.com/tgbugs/git-share.git))
+:end:
+
+#+begin_src bash
+time for i in {0..9999}; do echo $i; done | \
+xargs -P15 -r -n 1 -- curl -X GET http://localhost:4242/git/e6cf3a391686a0b49171b9b195da88e81125bb1e -H
+#+end_src
+
+|  time | avg       |
+|-------+-----------|
+|   6.8 | 6.8072857 |
+|   6.7 | 1469.0143 |
+| 6.542 |           |
+| 7.323 |           |
+| 7.045 | slad      |
+| 6.306 |           |
+| 6.935 | slad      |
+#+TBLFM: @2$2=vmean(@2$1..@>$1)
+#+TBLFM: @3$2=(10000 / @2$2)
+
+Run this in your repl if you are going to run these directly.
+Might be able to unify =with-connection= and =query= for both
+repl and server, aka swank and hunchentoot. As long as we don't
+have multiple databases that we need to query within a single
+namespace this should be ok.
+
+#+name: connect-toplevel
+#+begin_src lisp :noweb yes
+(defparameter *db-connection*
+  (postmodern:connect-toplevel
+   "<<db-name>>"
+   "<<user-name>>"
+   "gsu123"
+   "localhost"))
+#+end_src
+
+#+begin_src elisp :noweb yes :results drawer :wrap src lisp
+(pp '
+ <<connect-toplevel>>)
+#+end_src
+
+#+RESULTS:
 #+begin_src lisp
-(psql:query (:select '* :from 'first_commits))
+(defparameter *db-connection*
+  (postmodern:connect-toplevel "git_share_test" "git-share-user" "gsu123" "localhost"))
 #+end_src
 
 #+begin_src lisp
-(psql:query "INSERT INTO first_commits (first_commit, git_remote)
+(postmodern:query (:select '* :from 'first_commits))
+#+end_src
+
+#+begin_src lisp
+(postmodern:query "INSERT INTO first_commits (first_commit, git_remote)
                     VALUES ('6d96945e85d4e949215910f13f3e620495b5e165',
                             'https://github.com/tgbugs/pyontutils.git')")
 #+end_src
