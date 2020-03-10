@@ -50,18 +50,23 @@ no http semantics at all
 *** =/repo=
 **** =/repo/=
 **** =/repo/submit=
-
 **** =/resolve=
 **** =/resolve/{first-commit}=
 **** =/resolve/{first-commit}/{ref}=
 in theory we can resolve shortened fragments until things become ambiguous
 **** =/resolve?first-commit={first-commit}&ref={ref}=
-
 **** =/git=
 **** =/git/{first-commit}=
 **** =/git/{first-commit}/{ref}=
 in theory we can resolve shortened fragments until things become ambiguous
 **** =/git?first-commit={first-commit}&ref={ref}=
+* Setup
+Git share uses the =pguri= extension. On Gentoo you can install it with the following.
+
+#+begin_src bash
+layman -a tgbugs-overlay
+emerge pguri
+#+end_src
 * Code
 #+name: project-name-base
 : git-share
@@ -198,11 +203,6 @@ the postgres password in [[file:~/.pgpass]] e.g. via a line like
     (split-window-below)
     (windmove-down)
     (switch-to-buffer buffer)))
-#+end_src
-
-#+begin_src bash
-layman -a tgbugs-overlay
-emerge pguri
 #+end_src
 
 #+name: extensions
@@ -514,6 +514,9 @@ this is the one that amuses me the most deeply. 15mb. Sure you need a
 copy of sbcl on the server, but still ... wow.
 
 Tangle and run build-image to create a core dump that can be loaded on another system.
+
+And WOW the memory savings compared to running the =start-small= version.
+Obviously a tradeoff in there somewhere, but seriously wow.
 #+name: slad
 #+header: :shebang "#!/usr/bin/sbcl --script"
 #+header: :tangle-mode (identity #o0755)
@@ -712,13 +715,13 @@ https://sites.google.com/site/sabraonthehill/postmodern-examples/postmodern-conn
 
 #+name: core
 #+begin_src lisp :noweb yes :tangle ./core.lisp
-#-(and)(
-        (ql:quickload :cl-who)
-        (ql:quickload :hunchentoot)
-        (ql:quickload :easy-routes)
-        (ql:quickload :postmodern)
-        (rename-package :postmodern :postmodern '(psql))
-        )
+#-(and)(progn
+         (ql:quickload :cl-who)
+         (ql:quickload :hunchentoot)
+         (ql:quickload :easy-routes)
+         (ql:quickload :postmodern)
+         (rename-package :postmodern :postmodern '(psql))
+         )
 (in-package :<<project-name-base()>>)
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (rename-package :postmodern :postmodern '(psql)))
@@ -753,42 +756,54 @@ https://sites.google.com/site/sabraonthehill/postmodern-examples/postmodern-conn
 (defun format-git-id (first-commit &optional (ref ""))
   (format nil "Id: git:~a:~a" first-commit ref))
 
+<<queries>>
+<<helpers>>
+<<routes>>
+#+end_src
+
+Queries
+#+name: queries
+#+begin_src lisp
 ;;; queries
-;(require 'cl-postgres)  ; cl-postgres-error should already be pulled in by ql:quickload postmodern
 
 (defun query-insert-fc (first-commit git-remote)
   (handler-bind
       (
        (cl-postgres-error:unique-violation (lambda (condition)
-                                            (declare (ignore condition))
-                                            (print "aaaaaaaaaaa 1")
-                                            ;(abort-web 200)
-                                            (setf (hunchentoot:return-code*) 200)
-                                            ;(invoke-restart 'continue)
-                                            (ignore-errors)
-                                            ;(invoke-restart 'abort)
-                                            (print "aaaaaaaaaaa 2")
-))
-       ;(cl-postgres-error:unique-violation (lambda (condition) (abort-web 200)))
-       ;(error (lambda (condition) (print "argh") (print condition) (error condition)))
-)
+                                             (declare (ignore condition))
+                                             (print "aaaaaaaaaaa 1")
+                                             ;;(abort-web 200)
+                                             (setf (hunchentoot:return-code*) 200)
+                                             ;;(invoke-restart 'continue)
+                                             (ignore-errors)
+                                             ;;(invoke-restart 'abort)
+                                             (print "aaaaaaaaaaa 2")
+                                             ))
+       ;;(cl-postgres-error:unique-violation (lambda (condition) (abort-web 200)))
+       ;;(error (lambda (condition) (print "argh") (print condition) (error condition)))
+       )
     (with-connection
-    (postmodern:query (:insert-rows-into 'first_commits
-                          :columns 'first_commit 'git_remote
+        (postmodern:query (:insert-rows-into 'first_commits
+                           :columns 'first_commit 'git_remote
                            :values (list (list first-commit git-remote)))))))
 
 ;; TODO (handler-bind (cl-postgres-error::* #'some-handler))
 (defun query-select-fc-remotes (first-commit)
   (with-connection
-  (postmodern:query (:select 'git_remote
-                 :from 'first_commits
-                :where (:= 'first_commit first-commit)))))
+      (postmodern:query (:select 'git_remote
+                         :from 'first_commits
+                         :where (:= 'first_commit first-commit)))))
 
 (defun query-select-id-remotes (first-commit &optional ref)
   ;; TODO
   (with-connection
-  (query-select-fc-remotes first-commit)))
+      (query-select-fc-remotes first-commit)))
 
+#+end_src
+
+Helper functions
+#+name: helpers
+#+begin_src lisp
 ;;; helpers
 
 (defun abort-db (condition)
@@ -810,10 +825,14 @@ https://sites.google.com/site/sabraonthehill/postmodern-examples/postmodern-conn
                    (query-select-fc-remotes first-commit)
                    (abort-web 404))))
           (t (abort-web 404)))))
+#+end_src
 
+Routes
+#+name: routes
+#+begin_src lisp
 ;;; routes
-(easy-routes:defroute
- post-git-fc ("/git/:first-commit" :method :post) (remote)
+(easy-routes:defroute post-git-fc
+ ("/git/:first-commit" :method :post) (remote)
  (setf (hunchentoot:content-type*) "text/plain")
  ;; if known remote pattern check for first commit
  ;; if config parameter set to check all clone and validate first commit
@@ -840,7 +859,6 @@ https://sites.google.com/site/sabraonthehill/postmodern-examples/postmodern-conn
  (setf (hunchentoot:content-type*) "text/plain")
  (format-git-id first-commit ref))
 #+end_src
-
 *** test
 #+begin_src bash :results drawer
 curl -X POST http://localhost:4242/git/e6cf3a391686a0b49171b9b195da88e81125bb1e?remote=https://github.com/tgbugs/git-share.git
@@ -848,7 +866,6 @@ curl -X POST http://localhost:4242/git/e6cf3a391686a0b49171b9b195da88e81125bb1e?
 
 #+RESULTS:
 :results:
-Register: git:e6cf3a391686a0b49171b9b195da88e81125bb1e -> https://github.com/tgbugs/git-share.git
 :end:
 
 #+begin_src bash :results drawer
