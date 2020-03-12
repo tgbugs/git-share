@@ -1,5 +1,8 @@
 #+TITLE: git-share a git repository resolver
 
+# FIXME this needs to be called before tangling can continue ... how safely ...
+#+call: def-project-name-base()
+
 #+name: project-description-short
 #+header: :results value drawer
 #+begin_src elisp :exports results :eval no-export
@@ -93,9 +96,6 @@ emerge pguri
 (defun project-db-name ()
   "<<db-name>>")
 #+end_src
-
-#+call: def-project-name-base()
-# FIXME this needs to be called before tangling can continue ... how safely ...
 
 ** SQL
 :PROPERTIES:
@@ -742,11 +742,14 @@ https://sites.google.com/site/sabraonthehill/postmodern-examples/postmodern-conn
 
 (defvar *acceptor* nil)
 
-(defun server-start (&key (port 4242))
+(defun server-start (&key (port 4242) (log t))
   (server-stop)
   (hunchentoot:start (setf *acceptor*
                            (make-instance 'easy-routes:routes-acceptor
-                                          :port port))))
+                                          :port port)))
+  (unless log
+    (setf (slot-value *acceptor* 'hunchentoot::access-log-destination) nil)
+    (setf (slot-value *acceptor* 'hunchentoot::message-log-destination) nil)))
 
 (defun server-stop ()
   (when *acceptor*
