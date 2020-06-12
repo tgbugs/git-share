@@ -95,8 +95,9 @@ emerge pguri
 
 ** elisp
 #+name: def-project-name-base
-#+header: :noweb yes :results none 
-#+begin_src emacs-lisp :exports none
+#+header: :noweb yes :results value :cache yes :lexical yes
+#+begin_src emacs-lisp :exports none :var reset=(identity nil)
+(when (or (not (boundp '--git-share-elisp-loaded)) reset)
 (defun project-name (&optional suffix)
   "project name without - separator"
   (format "%s%s" "<<project-name-base()>>" (or suffix "")))
@@ -110,6 +111,7 @@ emerge pguri
     nil 'literal))
 (defun project-db-name ()
   "<<db-name>>")
+(setq --git-share-elisp-loaded (if reset (current-time-string) t)))
 #+end_src
 
 ** SQL
@@ -142,6 +144,7 @@ emerge pguri
 *** code
 :PROPERTIES:
 :CREATED:  [2020-01-29 Wed 16:51]
+:header-args: :comments link
 :END:
 #+name: postgres
 #+header: :engine postgresql
@@ -206,14 +209,14 @@ the postgres password in [[file:~/.pgpass]] e.g. via a line like
         (let ((sl (split-string comint-password-prompt-regexp "Response")))
           (concat (car sl) "it\\|Response" (cadr sl)))))
 
-(setq sql-postgres-login-params
-      '((user :default "postgres")
-        (database :default "postgres")
-        (server :default "localhost")
-        (port :default 5432)))
 ;; TODO this doesn't work due to how orb babel calls elisp NOT due to buffer confusion
 ;; https://emacs.stackexchange.com/questions/42096/running-elisp-within-an-orgmode-code-block
-(let ((buffer (sql-postgres)))
+(let* ((sql-postgres-login-params
+        '((user :default "postgres")
+          (database :default "postgres")
+          (server :default "localhost")
+          (port :default 54321)))
+       (buffer (sql-postgres)))
   (with-current-buffer (get-buffer this-org-buffer)
     (split-window-below)
     (windmove-down)
@@ -319,6 +322,13 @@ GRANT INSERT (first_commit, git_remote)
 #+end_src
 
 ** cl
+:properties:
+:header-args: :comments link
+:end:
+# sadly the force eval hack doesn't work
+# because org looks for the project-name-* functions first
+# :var --force-eval-hack=def-project-name-base()
+# :header-args: :comments link :var __FORCE_EVAL_HACK=def-project-name-base()
 *** packages
 #+name: package.lisp
 #+begin_src lisp :noweb yes :tangle ./package.lisp
@@ -348,6 +358,7 @@ GRANT INSERT (first_commit, git_remote)
 #+end_src
 
 #+name: project-asd
+#+header: :eval never
 #+begin_src lisp :noweb yes :tangle (format "./%s" (project-name ".asd"))
 (in-package :cl-user)
 (defpackage :<<project-name-base()>>-asd
@@ -375,7 +386,17 @@ GRANT INSERT (first_commit, git_remote)
   ;;:components ((:file "daemon"))  ; explicitly don't load the file since it is a script
 )
 
-(defsystem :<<project-name-base()>>/small-start
+(defsystem :<<project-name-base()>>/start-small
+  ;; Confusingly this includes no files and is loaded using `ql:quickoad'
+  ;; in bootstrap-image.lisp simply to pull in the swank dependency .
+  ;; I'm not sure if this is the right way to do this, but it works.
+  :depends-on (:<<project-name-base()>>
+               "swank"))
+
+(defsystem :<<project-name-base()>>/bootstrap-helper
+  ;; bootstrap-image cannot be listed as a component
+  ;; because some kind of circularity makes it impossible
+  ;; for the pk function to be found during compile
   :depends-on (:<<project-name-base()>>
                "swank"))
 
@@ -420,7 +441,8 @@ GRANT INSERT (first_commit, git_remote)
   `(quote ,keywords)
   (destructuring-bind (defaults cases returns)
       (apply #'mapcar #'list (map 'list #'pk keywords))
-    `(let ((args (cdr sb-ext:*posix-argv*))
+    `(let ((args (cdr #+ecl (loop for n from 0 below (si:argc) collect (si:argv n))
+                      #+sbcl sb-ext:*posix-argv*))
            ,@defaults)
        (do ()
            ((null args) nil)
@@ -431,7 +453,11 @@ GRANT INSERT (first_commit, git_remote)
        (list ,@returns))))
 #+end_src
 
-#+header: :shebang "#!/usr/bin/sbcl --script" :tangle-mode (identity #o0755)
+While we're here, some crazy stuff on shebangs.
+<https://stackoverflow.com/questions/4303128/
+how-to-use-multiple-arguments-for-awk-with-a-shebang-i-e>
+
+#+header: :shebang "#!/usr/bin/env -S sbcl --script" :tangle-mode (identity #o0755)
 #+begin_src lisp :noweb yes :tangle ./args-test :results output
 <<parse-args-cli>>
 (format *standard-output* "~s~%" sb-ext:*posix-argv*)
@@ -439,6 +465,20 @@ GRANT INSERT (first_commit, git_remote)
                                              (:port 4242)
                                              (:pid "/tmp/<<project-name-base()>>.pid")
                                              (:flag)))
+(format t "~s~%" *compile-file-truename*)
+(format t "~s~%" *compile-file-pathname*)
+#+end_src
+
+#+header: :shebang "#!/usr/bin/env -S ecl -q -norc -shell"
+#+begin_src lisp  :noweb yes :tangle ./args-test-ecl :results output
+<<parse-args-cli>>
+(format *standard-output* "~s~%" (loop for n from 0 below (si:argc) collect (si:argv n)))
+(format *standard-output* "~s~%" (parse-args (:qq nil)
+                                             (:port 4242)
+                                             (:pid "/tmp/<<project-name-base()>>.pid")
+                                             (:flag)))
+(format t "~s~%" *compile-file-truename*)
+(format t "~s~%" *compile-file-pathname*)
 #+end_src
 
 #+begin_src lisp :exports none :eval never
@@ -460,33 +500,55 @@ GRANT INSERT (first_commit, git_remote)
 #+end_src
 *** development
 **** slime
-This block only needs to be run once, after that any further modifications can be
-made by executing the ref:core or any of the other blocks block again without needing
-to run this block again.
-
-Also apparently if we don't do testing in =cl-user= or something like that then
-there is a problem finding the database connection? Pretty sure that is a bug on my end.
-#+name: slime-repl-devel
-#+caption: run this block if you are going to be doing interactive development in the repl
-#+header: :comments link
-#+begin_src lisp :noweb yes
-;;(push :slime *features*)
-;;#+slime(progn
+# FIXME probably better to use asdf:load-system
+# even in this context ...
+#+name: slime-repl-setup
+#+begin_src lisp
 (ql:quickload :cl-who)
 (ql:quickload :hunchentoot)
 (ql:quickload :easy-routes)
 (ql:quickload :postmodern)
 (rename-package :postmodern :postmodern '(psql))
-;;)
+(defpackage #:git-share
+  (:use :cl)
+  (:export #:server-start
+           #:server-stop))
+#+end_src
+
+#+name: slime-repl-devel
+#+caption: run this block if you are going to be doing interactive development in the repl
+#+header: :comments link :results none
+#+begin_src lisp :noweb yes
 (setq hunchentoot:*catch-errors-p* nil)
 <<core>>
 (git-share:server-start :port 4242)
 #+end_src
 
 When you are done you can run the following block.
+#+name: slime-repl-devel-stop
 #+begin_src lisp
 (git-share:server-stop)
 #+end_src
+
+For whatever reason we still need ref:slime-repl-setup.
+I still have no idea how to get org-bable to execute the quickload
+bits first and the rest later if it is all sent in one block. Also
+the first time loading these it can make more sense to execute them
+manually so that you get an interactive debugging session in the event
+that something goes wrong.
+
+The ref:slime-repl-devel block only needs to be run once, after that any
+further modifications can be made by executing the ref:core or any of
+the other blocks block again without needing to run this block again.
+
+Also apparently if we don't do testing in =cl-user= or something like that then
+there is a problem finding the database connection? Pretty sure that is a bug on my end.
+
+# Hrm, maybe the issue is that I need to add an eval-when compile to the quickloads?
+# yes it would seem so, but then there is the issue that if you run this in the same
+# emacs client you are clicking an org-link from you have to C-g out of the org link
+# resolution code in order to debug in slime. Sigh async emacs.
+
 *** deployment
 **** SLaD
 So. Of all the many ways that one can try to package this thing to run
@@ -497,11 +559,22 @@ Tangle and run build-image to create a core dump that can be loaded on another s
 
 And WOW the memory savings compared to running the =start-small= version.
 Obviously a tradeoff in there somewhere, but seriously wow.
-#+name: slad
+
+#+name: build-sbcl
 #+header: :shebang "#!/usr/bin/sbcl --script"
 #+header: :tangle-mode (identity #o0755)
-#+begin_src lisp :tangle ./build-image
+#+begin_src lisp :noweb yes :tangle ./build-image
 (load "bootstrap-image.lisp")
+#-quicklisp
+(let ((quicklisp-init (merge-pathnames "code/lisp/quicklisp/setup.lisp"
+                                       (user-homedir-pathname))))
+  (when (probe-file quicklisp-init)
+    (load quicklisp-init)))
+;;(push (uiop:truenamize "./") asdf:*central-registry*)
+#+()
+(push (uiop:truenamize #p"~/git/<<project-name-base()>>") ql:*local-project-directories*)  ; FIXME
+#+()
+(ql:quickload :<<project-name-base()>>/bootstrap-image)
 (save-lisp-and-die "git-share-start-small" :toplevel #'main :executable t :compression t)
 #+end_src
 
@@ -513,7 +586,8 @@ Obviously a tradeoff in there somewhere, but seriously wow.
     (load quicklisp-init)))
 
 (push (uiop:truenamize #p"~/git/<<project-name-base()>>") ql:*local-project-directories*)
-(ql:quickload :<<project-name-base()>>/small-start)
+;;(ql:quickload :<<project-name-base()>>/start-small)
+(ql:quickload :<<project-name-base()>>/bootstrap-image)
 
 (defparameter *finished* nil)
 
@@ -536,8 +610,10 @@ Obviously a tradeoff in there somewhere, but seriously wow.
        (when *finished*
          (format t "DONE~%")
          (git-share:server-stop)
-         (sb-ext:quit)))
-  )
+         #+ecl
+         (si:exit)
+         #+sbcl
+         (sb-ext:quit))))
 #+end_src
 
 It seems like =app-misc/detachtty= may be needed to get this to work.
@@ -595,10 +671,10 @@ http://theatticlight.net/posts/A-Lisp-Daemon/
 https://www.darkchestnut.com/2016/daemonizing-common-lisp-services/
 https://www.reddit.com/r/Common_Lisp/comments/4n7ly6/daemonizing_common_lisp_services/
 
-#+name: small-start
+#+name: start-small
 #+header: :shebang "#!/usr/bin/sbcl --script"
 #+header: :tangle-mode (identity #o0755)
-#+begin_src lisp :noweb yes :tangle ./small-start.lisp
+#+begin_src lisp :noweb yes :tangle ./start-small.lisp
 #-quicklisp
 (let ((quicklisp-init (merge-pathnames "code/lisp/quicklisp/setup.lisp"
                                        (user-homedir-pathname))))
@@ -606,7 +682,7 @@ https://www.reddit.com/r/Common_Lisp/comments/4n7ly6/daemonizing_common_lisp_ser
     (load quicklisp-init)))
 
 (push (uiop:truenamize #p"~/git/<<project-name-base()>>") ql:*local-project-directories*)
-(ql:quickload :<<project-name-base()>>/small-start)
+(ql:quickload :<<project-name-base()>>/start-small)
 
 <<parse-args-cli>>
 
@@ -687,6 +763,30 @@ start_pre() {
     checkpath --directory --owner ${command_owner} --mode 0775 "/run/${SVCNAME}"
     checkpath --directory --owner ${command_owner} --mode 0775 "${LOG_LOC}"
 }
+#+end_src
+**** ecl
+The best reference for this is
+<https://common-lisp.net/project/ecl/static/manual/
+System-building.html#Compiling-with-ECL> and the =asdf:make-build=
+option seems to be the best for our use case.
+
+# a good reference for shebangs https://www.cliki.net/Unix%20shell%20scripting
+# #+header: :tangle-mode (identity #o0755)
+#+name: build-ecl
+#+header: :shebang "#!/usr/bin/env -S ecl -q -norc -shell"
+#+begin_src lisp :tangle ./build-ecl
+(asdf:make-build :git-share/start-small
+                 :type :program
+                 :monolithic t  ;;
+                 :move-here #P"./"
+                 :epilogue-code '(main))
+#+end_src
+#+begin_src lisp
+#+ecl
+(progn
+(require 'cmp)
+(c:build-program "somewhere-else" "test-ecl.lisp")
+)
 #+end_src
 **** daemon :old:
 self daemonizing approach
@@ -780,7 +880,11 @@ https://sites.google.com/site/sabraonthehill/postmodern-examples/postmodern-conn
                                "localhost"
                                :port 5432))
 
-(defparameter *db-connection-parameters* '("<<db-name>>" "<<user-name>>" "gsu123" "localhost" :pooled-p t))
+(defparameter *db-connection-parameters* '("<<db-name>>"
+                                           "<<user-name>>"
+                                           "gsu123"
+                                           "localhost"
+                                           :pooled-p t))
 
 (defmacro with-connection (&body body)
   `(postmodern:with-connection *db-connection-parameters*
@@ -841,6 +945,7 @@ https://sites.google.com/site/sabraonthehill/postmodern-examples/postmodern-conn
 
 (defun query-select-id-remotes (first-commit &optional ref)
   ;; TODO
+  (declare (ignore ref))
   (with-connection
       (query-select-fc-remotes first-commit)))
 
@@ -852,6 +957,7 @@ https://sites.google.com/site/sabraonthehill/postmodern-examples/postmodern-conn
 
 (defun abort-db (condition)
   ;; TODO
+  (declare (ignore condition))
   (abort-web 500))
 
 (defun abort-web (&optional code)
@@ -861,7 +967,7 @@ https://sites.google.com/site/sabraonthehill/postmodern-examples/postmodern-conn
 (defun parse-id (id)
   (destructuring-bind (&optional type first-commit ref)
       (uiop:split-string id :separator ":")
-      (format *standard-output* "~s ~s ~s" type first-commit ref)
+    (format *standard-output* "~s ~s ~s" type first-commit ref)
     (cond ((string= type "git")
            (if ref  ; implies first-commit
                (query-select-id-remotes first-commit ref)
@@ -896,9 +1002,10 @@ https://sites.google.com/site/sabraonthehill/postmodern-examples/postmodern-conn
       (progn
         (setf (hunchentoot:content-type*) "text/plain")
         (let ((remotes (parse-id id)))
+          ;;(format t "remotes: ~a" remotes)
           (if remotes
               (caar remotes)  ; list of lists coming back from the query, which is bad
-              (setf (hunchentoot:return-code*) 404))))))
+              (abort-web 404))))))
 
 (easy-routes:defroute get-git-fc
     ("/git/:first-commit" :method :get) ()
@@ -911,6 +1018,9 @@ https://sites.google.com/site/sabraonthehill/postmodern-examples/postmodern-conn
   (setf (hunchentoot:content-type*) "text/plain")
   (format-git-id first-commit ref))
 #+end_src
+
+# Just here to say that being able to C-x C-e the sexp and have
+# the bug go away on the live server is really satisfying
 *** test
 **** cl
 Use =dexador= as our http client.
