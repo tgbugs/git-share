@@ -380,7 +380,7 @@ GRANT INSERT (first_commit, git_remote)
                "hunchentoot"
                "easy-routes"
                "postmodern")
-  :serial t  ; needed so that packages loads before the others
+  :serial t  ; needed so that package loads before the others
   :components ((:file "package")
                (:file "core")
                (:file "parse-args")))
@@ -394,23 +394,13 @@ GRANT INSERT (first_commit, git_remote)
 )
 
 (defsystem :<<project-name-base()>>/start-small
-  ;; Confusingly this includes no files and is loaded using `ql:quickoad'
-  ;; in bootstrap-image.lisp simply to pull in the swank dependency .
-  ;; I'm not sure if this is the right way to do this, but it works.
   :depends-on (:<<project-name-base()>>
                "swank"))
 
-(defsystem :<<project-name-base()>>/bootstrap-helper
-  ;; bootstrap-image cannot be listed as a component
-  ;; because some kind of circularity makes it impossible
-  ;; for the pk function to be found during compile
-  :depends-on (:<<project-name-base()>>
-               "swank"))
-
-(defsystem :<<project-name-base()>>/bootstrap-helper-ecl
+(defsystem :<<project-name-base()>>/bootstrap-image
   :depends-on (:<<project-name-base()>>
                "swank")
-  :components ((:file "bootstrap-image-ecl")))
+  :components ((:file "bootstrap-image")))
 
 (defsystem :<<project-name-base()>>/test
   :depends-on (:<<project-name-base()>>)
@@ -418,7 +408,6 @@ GRANT INSERT (first_commit, git_remote)
                         :serial t
                         :components ((:file "package")
                                      (:file "tests")))))
-
 #+end_src
 *** parse args
 #+name: parse-args-cli
@@ -590,24 +579,18 @@ Tangle and run build-image to create a core dump that can be loaded on another s
 And WOW the memory savings compared to running the =start-small= version.
 Obviously a tradeoff in there somewhere, but seriously wow.
 
-#+name: build-sbcl
+#+name: build-image-sbcl
 #+header: :shebang "#!/usr/bin/sbcl --script"
 #+header: :tangle-mode (identity #o0755)
-#+begin_src lisp :noweb yes :tangle ./build-image
-(load "bootstrap-image.lisp")
+#+begin_src lisp :noweb yes :tangle ./build-image-sbcl
+<<quicklisp-setup>>
+(push (uiop:truenamize #p"~/git/<<project-name-base()>>") ql:*local-project-directories*)
+(ql:quickload :<<project-name-base()>>/bootstrap-image)
 (save-lisp-and-die "git-share-sbcl" :toplevel #'main :executable t :compression t)
 #+end_src
 
-#+begin_src lisp :noweb yes :tangle ./bootstrap-image.lisp
-<<quicklisp-setup>>
-(push (uiop:truenamize #p"~/git/<<project-name-base()>>") ql:*local-project-directories*)
-(ql:quickload :<<project-name-base()>>/bootstrap-helper)
-
-<<bootstrap-common>>
-#+end_src
-
 #+name: bootstrap-common
-#+begin_src lisp :noweb yes :tangle ./bootstrap-image-ecl.lisp
+#+begin_src lisp :noweb yes :tangle ./bootstrap-image.lisp
 (defparameter *finished* nil)
 
 (defun main ()
@@ -792,7 +775,7 @@ option seems to be the best for our use case.
 #+begin_src lisp :noweb yes :tangle ./build-image-ecl
 <<quicklisp-setup>>
 (push (uiop:truenamize #p"~/git/<<project-name-base()>>") asdf:*central-registry*)
-(asdf:make-build :git-share/bootstrap-helper-ecl
+(asdf:make-build :git-share/bootstrap-image
                  :type :program
                  :monolithic t  ;;
                  :move-here #P"./"
