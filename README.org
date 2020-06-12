@@ -14,6 +14,30 @@
 A git repository registration service and resolver.
 :end:
 
+* Setup
+To get started tangle this file. Yes the double tangle is intentional.
+# In [[../sparc-curation/docs/setup.org::tangle-setup-org]] I have nearly
+# figured out the way to handle the double bootstrap succeed when there are
+# unbound elisp functions, it requires the use of fboundp.
+#+begin_src bash :eval never :exports code
+emacs --batch \
+      --load org \
+      --load ob-shell \
+      --eval "(unless ((lambda (a b) (or (string> a b) (string= a b))) (org-version) \"9.3\") (message (format \"your org is too old! %s < 9.3 try loading ~/git/orgstrap/init.el\" (org-version))) (kill-emacs 1))" \
+      --eval "(org-babel-tangle-file \"README.org\")" \
+      --load org-elisp-setup-hack.el \
+      --eval "(org-babel-tangle-file \"README.org\")"
+rm org-elisp-setup-hack.el
+#+end_src
+** Dependencies
+Git share uses the =pguri= extension. On Gentoo you can install it with the following.
+
+#+begin_src bash
+layman -a tgbugs-overlay
+emerge pguri
+#+end_src
+** Quicklisp
+TODO
 * Background
 What if I could run =git share= in a repository to tell the world that I had a copy of a
 git repository available somewhere? Using the first commit hash of a repo as a unique ID
@@ -78,13 +102,6 @@ in theory we can resolve shortened fragments until things become ambiguous
 **** =/git/{first-commit}/{ref}=
 in theory we can resolve shortened fragments until things become ambiguous
 **** =/git?first-commit={first-commit}&ref={ref}=
-* Setup
-Git share uses the =pguri= extension. On Gentoo you can install it with the following.
-
-#+begin_src bash
-layman -a tgbugs-overlay
-emerge pguri
-#+end_src
 * Code
 #+name: project-name-base
 : git-share
@@ -96,8 +113,10 @@ emerge pguri
 ** elisp
 #+name: def-project-name-base
 #+header: :noweb yes :results value :cache yes :lexical yes
+#+header: :tangle ./org-elisp-setup-hack.el
 #+begin_src emacs-lisp :exports none :var reset=(identity nil)
 (when (or (not (boundp '--git-share-elisp-loaded)) reset)
+(defvar *-gsell-* t)
 (defun project-name (&optional suffix)
   "project name without - separator"
   (format "%s%s" "<<project-name-base()>>" (or suffix "")))
@@ -113,7 +132,6 @@ emerge pguri
   "<<db-name>>")
 (setq --git-share-elisp-loaded (if reset (current-time-string) t)))
 #+end_src
-
 ** SQL
 :PROPERTIES:
 :header-args:sql: :mkdirp yes
@@ -151,8 +169,8 @@ emerge pguri
 #+header: :dbhost localhost
 #+header: :dbuser postgres
 #+header: :database postgres
-#+header: :cmdline (format "-v database=%s" (project-db-name))
-#+begin_src sql :noweb yes :tangle ./sql/postgres.sql
+#+header: :cmdline (when (boundp '*-gsell-*) (format "-v database=%s" (project-db-name)))
+#+begin_src sql :noweb yes :tangle (when (boundp '*-gsell-*) "./sql/postgres.sql")
 DO
 $body$
 BEGIN
@@ -227,8 +245,8 @@ the postgres password in [[file:~/.pgpass]] e.g. via a line like
 #+header: :engine postgresql
 #+header: :dbhost localhost
 #+header: :dbuser postgres
-#+header: :database (project-db-name)
-#+begin_src sql :noweb yes :tangle ./sql/extensions.sql
+#+header: :database (when (boundp '*-gsell-*) (project-db-name))
+#+begin_src sql :noweb yes :tangle (when (boundp '*-gsell-*) "./sql/extensions.sql")
 CREATE EXTENSION uri;
 CREATE EXTENSION pgcrypto;
 #+end_src
@@ -236,18 +254,18 @@ CREATE EXTENSION pgcrypto;
 #+name: schemas
 #+header: :engine postgresql
 #+header: :dbhost localhost
-#+header: :dbuser (project-name-base "admin")
-#+header: :database (project-db-name)
-#+begin_src sql :noweb yes :tangle ./sql/schemas.sql
+#+header: :dbuser (when (boundp '*-gsell-*) (project-name-base "admin"))
+#+header: :database (when (boundp '*-gsell-*) (project-db-name))
+#+begin_src sql :noweb yes :tangle (when (boundp '*-gsell-*) "./sql/schemas.sql")
 CREATE SCHEMA IF NOT EXISTS <<schema-name>>;
 #+end_src
 
 #+name: tables
 #+header: :engine postgresql
 #+header: :dbhost localhost
-#+header: :dbuser (project-name-base "admin")
-#+header: :database (project-db-name)
-#+begin_src sql :noweb yes :tangle ./sql/tables.sql
+#+header: :dbuser (when (boundp '*-gsell-*) (project-name-base "admin"))
+#+header: :database (when (boundp '*-gsell-*) (project-db-name))
+#+begin_src sql :noweb yes :tangle (when (boundp '*-gsell-*) "./sql/tables.sql")
 -- wrap table creation in a transaction block to avoid partial failures along the way
 -- from resulting in future failures when tables already exist
 DO
@@ -283,10 +301,10 @@ $body$ language plpgsql;
 #+name: permissions
 #+header: :engine   postgresql
 #+header: :dbhost   localhost
-#+header: :dbuser   (project-name-base "admin")
-#+header: :database (project-db-name)
-#+header: :cmdline  (format "-v database=%s" (project-db-name))
-#+begin_src sql :noweb yes :tangle ./sql/permissions.sql
+#+header: :dbuser   (when (boundp '*-gsell-*) (project-name-base "admin"))
+#+header: :database (when (boundp '*-gsell-*) (project-db-name))
+#+header: :cmdline  (when (boundp '*-gsell-*) (format "-v database=%s" (project-db-name)))
+#+begin_src sql :noweb yes :tangle (when (boundp '*-gsell-*) "./sql/permissions.sql")
 GRANT CONNECT
    ON DATABASE :database
    TO "<<user-name>>";
@@ -317,7 +335,7 @@ GRANT INSERT (first_commit, git_remote)
 # #+call: permissions()
 
 #+header: :shebang "#!/usr/bin/env bash" :mkdirp yes
-#+begin_src bash :noweb yes :tangle (format "./bin/%s" (project-name-base "db-setup"))
+#+begin_src bash :noweb yes :tangle (when (boundp '*-gsell-*) (format "./bin/%s" (project-name-base "db-setup")))
 # TODO sadly this is easier to do in bash
 #+end_src
 
@@ -340,7 +358,7 @@ GRANT INSERT (first_commit, git_remote)
 #+end_src
 *** packages
 #+name: package.lisp
-#+begin_src lisp :noweb yes :tangle ./package.lisp
+#+begin_src lisp :noweb yes :tangle ./src/package.lisp :mkdirp yes
 (in-package :cl-user)
 
 (defpackage #:<<project-name-base()>>
@@ -365,10 +383,10 @@ GRANT INSERT (first_commit, git_remote)
 
 #+name: project-asd
 #+header: :eval never
-#+begin_src lisp :noweb yes :tangle (format "./%s" (project-name ".asd"))
+#+begin_src lisp :noweb yes :tangle (when (boundp '*-gsell-*) (format "./%s" (project-name ".asd")))
 (in-package :cl-user)
 (defpackage :<<project-name-base()>>-asd
-  (:use #:cl #:asdf))
+            (:use #:cl #:asdf))
 (in-package :<<project-name-base()>>-asd)
 
 (defsystem :<<project-name-base()>>
@@ -380,38 +398,40 @@ GRANT INSERT (first_commit, git_remote)
                "hunchentoot"
                "easy-routes"
                "postmodern")
-  :serial t  ; needed so that package loads before the others
-  :components ((:file "package")
-               (:file "core")
-               (:file "parse-args")))
+  :components ((:module "src"
+                :serial t  ; needed so that package loads before the others
+                :components ((:file "package")
+                             (:file "core")
+                             (:file "parse-args")))))
 
-#+()
+,#+()
 (defsystem :<<project-name-base()>>/daemon
   :depends-on (:<<project-name-base()>>
-               "cl-daemonize"
-               "swank")
+                                   "cl-daemonize"
+                                   "swank")
   ;;:components ((:file "daemon"))  ; explicitly don't load the file since it is a script
-)
+  )
 
 (defsystem :<<project-name-base()>>/start-small
   :depends-on (:<<project-name-base()>>
-               "swank"))
+                                   "swank"))
 
 (defsystem :<<project-name-base()>>/bootstrap-image
   :depends-on (:<<project-name-base()>>
-               "swank")
-  :components ((:file "bootstrap-image")))
+                                   "swank")
+  :components ((:module "src"
+                :components ((:file "bootstrap-image")))))
 
 (defsystem :<<project-name-base()>>/test
   :depends-on (:<<project-name-base()>>)
   :components ((:module "test"
-                        :serial t
-                        :components ((:file "package")
-                                     (:file "tests")))))
+                :serial t
+                :components ((:file "package")
+                             (:file "tests")))))
 #+end_src
 *** parse args
 #+name: parse-args-cli
-#+begin_src lisp :tangle ./parse-args.lisp
+#+begin_src lisp :tangle ./src/parse-args.lisp :mkdirp yes
 (in-package :parse-args)
 
 (defun norm-arg (arg)
@@ -469,7 +489,7 @@ While we're here, some crazy stuff on shebangs.
 how-to-use-multiple-arguments-for-awk-with-a-shebang-i-e>
 
 #+header: :shebang "#!/usr/bin/env -S sbcl --script" :tangle-mode (identity #o0755)
-#+begin_src lisp :noweb yes :tangle ./args-test :results output
+#+begin_src lisp :noweb yes :tangle ./t/args-test :results output :mkdirp yes
 <<quicklisp-setup>>
 <<package.lisp>>
 <<parse-args-cli>>
@@ -484,8 +504,8 @@ how-to-use-multiple-arguments-for-awk-with-a-shebang-i-e>
 (print (macroexpand '(parse-args (:flag) (:asdf 123))))
 #+end_src
 
-#+header: :shebang "#!/usr/bin/env -S ecl -q -norc -shell"
-#+begin_src lisp  :noweb yes :tangle ./args-test-ecl :results output
+#+header: :shebang "#!/usr/bin/env -S ecl -q -norc -shell" :mkdirp yes
+#+begin_src lisp  :noweb yes :tangle ./t/args-test-ecl :results output
 <<quicklisp-setup>>
 <<package.lisp>>
 <<parse-args-cli>>
@@ -579,10 +599,10 @@ Tangle and run build-image to create a core dump that can be loaded on another s
 And WOW the memory savings compared to running the =start-small= version.
 Obviously a tradeoff in there somewhere, but seriously wow.
 
+# FIXME final executable location should be ./bin
 #+name: build-image-sbcl
 #+header: :shebang "#!/usr/bin/sbcl --script"
-#+header: :tangle-mode (identity #o0755)
-#+begin_src lisp :noweb yes :tangle ./build-image-sbcl
+#+begin_src lisp :noweb yes :tangle ./bin/build-image-sbcl :mkdirp yes
 <<quicklisp-setup>>
 (push (uiop:truenamize #p"~/git/<<project-name-base()>>") ql:*local-project-directories*)
 (ql:quickload :<<project-name-base()>>/bootstrap-image)
@@ -590,7 +610,7 @@ Obviously a tradeoff in there somewhere, but seriously wow.
 #+end_src
 
 #+name: bootstrap-common
-#+begin_src lisp :noweb yes :tangle ./bootstrap-image.lisp
+#+begin_src lisp :noweb yes :tangle ./src/bootstrap-image.lisp
 (defparameter *finished* nil)
 
 (defun main ()
@@ -623,7 +643,8 @@ It seems like =app-misc/detachtty= may be needed to get this to work.
 Or the eternal loop might work as well. Needs more testing.
 
 #+name: open-rc-init-script-slad
-#+begin_src bash :tangle ./git-share-slad.rc
+#+header: :mkdirp yes
+#+begin_src bash :tangle ./resources/file-system/etc/init.d/git-share-slad.rc
 #!/sbin/openrc-run
 # Copyright 1999-2020 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
@@ -711,7 +732,8 @@ https://www.reddit.com/r/Common_Lisp/comments/4n7ly6/daemonizing_common_lisp_ser
 #+end_src
 
 #+name: open-rc-init-script
-#+begin_src bash :tangle ./git-share.rc
+#+header: :mkdirp yes
+#+begin_src bash :tangle ./resources/file-system/etc/init.d/git-share.rc
 #!/sbin/openrc-run
 # Copyright 1999-2020 Gentoo Authors
 # Distributed under the terms of the GNU General Public License v2
@@ -772,7 +794,7 @@ option seems to be the best for our use case.
 # #+header: :tangle-mode (identity #o0755)
 #+name: build-image-ecl
 #+header: :shebang "#!/usr/bin/env -S ecl -q -norc -shell"
-#+begin_src lisp :noweb yes :tangle ./build-image-ecl
+#+begin_src lisp :noweb yes :tangle ./bin/build-image-ecl :mkdirp yes
 <<quicklisp-setup>>
 (push (uiop:truenamize #p"~/git/<<project-name-base()>>") asdf:*central-registry*)
 (asdf:make-build :git-share/bootstrap-image
@@ -793,7 +815,7 @@ option seems to be the best for our use case.
 self daemonizing approach
 #+header: :shebang "#!/usr/bin/sbcl --script"
 #+header: :tangle-mode (identity #o0755)
-#+begin_src lisp :noweb yes :tangle "./daemon.lisp"
+#+begin_src lisp :noweb yes :tangle ./daemon.lisp
 <<quicklisp-setup>>
 ;(require 'uiop)
 ;(require 'asdf)
@@ -852,7 +874,7 @@ self daemonizing approach
 **** Tangle to file block
 #+name: core
 #+header: :comments link
-#+begin_src lisp :noweb yes :tangle ./core.lisp
+#+begin_src lisp :noweb yes :tangle ./src/core.lisp
 (in-package :<<project-name-base()>>)
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (rename-package :postmodern :postmodern '(psql)))
@@ -1053,8 +1075,8 @@ Use =dexador= as our http client.
 #<SB-SYS:FD-STREAM for "socket 127.0.0.1:41050, peer: 127.0.0.1:4242" {1007B534A3}>
 :end:
 **** bash/curl
-#+header: :shebang "#!/usr/bin/env sh"
-#+begin_src bash :var TEST_HOST="localhost" :results output :tangle ./test-curl.sh
+#+header: :shebang "#!/usr/bin/env sh" :mkdirp yes
+#+begin_src bash :var TEST_HOST="localhost" :results output :tangle ./t/test-curl.sh
 time for i in {0..9999}; do echo $i; done | \
 xargs -P15 -r -n 1 -- curl -s -X GET \
 http://${TEST_HOST}:4242/git/e6cf3a391686a0b49171b9b195da88e81125bb1e -H
