@@ -329,24 +329,30 @@ GRANT INSERT (first_commit, git_remote)
 # because org looks for the project-name-* functions first
 # :var --force-eval-hack=def-project-name-base()
 # :header-args: :comments link :var __FORCE_EVAL_HACK=def-project-name-base()
+*** common
+#+name: quicklisp-setup
+#+begin_src lisp
+#-quicklisp
+(let ((quicklisp-init (merge-pathnames "code/lisp/quicklisp/setup.lisp"
+                                       (user-homedir-pathname))))
+  (when (probe-file quicklisp-init)
+    (load quicklisp-init)))
+#+end_src
 *** packages
 #+name: package.lisp
 #+begin_src lisp :noweb yes :tangle ./package.lisp
 (in-package :cl-user)
-(defpackage #:<<project-name-base()>>
-  (:use
-   #:cl
-   ; reminder that deps do not go in :use
-   ;#:cl-who
-   ;#:hunchentoot
-   ;#:easy-routes
-   ;#:postmodern
-)
-  (:export #:server-start
-           #:server-stop
-)
-)
 
+(defpackage #:<<project-name-base()>>
+  (:use :cl)
+  (:export #:server-start
+           #:server-stop))
+
+(defpackage #:parse-args
+  (:use :cl)
+  (:export #:parse-args))
+
+#+()
 (defpackage #:<<project-name-base()>>/daemon
   (:use
    #:cl
@@ -376,7 +382,8 @@ GRANT INSERT (first_commit, git_remote)
                "postmodern")
   :serial t  ; needed so that packages loads before the others
   :components ((:file "package")
-               (:file "core")))
+               (:file "core")
+               (:file "parse-args")))
 
 #+()
 (defsystem :<<project-name-base()>>/daemon
@@ -400,6 +407,11 @@ GRANT INSERT (first_commit, git_remote)
   :depends-on (:<<project-name-base()>>
                "swank"))
 
+(defsystem :<<project-name-base()>>/bootstrap-helper-ecl
+  :depends-on (:<<project-name-base()>>
+               "swank")
+  :components ((:file "bootstrap-image-ecl")))
+
 (defsystem :<<project-name-base()>>/test
   :depends-on (:<<project-name-base()>>)
   :components ((:module "test"
@@ -410,46 +422,56 @@ GRANT INSERT (first_commit, git_remote)
 #+end_src
 *** parse args
 #+name: parse-args-cli
-#+begin_src lisp
+#+begin_src lisp :tangle ./parse-args.lisp
+(in-package :parse-args)
+
 (defun norm-arg (arg)
   ; FIXME type decls here would help
   ; FIXME parse-integer ignores leading zeros!
   (let ((int (ignore-errors (parse-integer arg))))
     (if int int arg)))
 
-(defun pk (element)
+(defun process-keyword (element)
   (when (not (listp element))
     (error (format nil "~s not a list!" element)))
   (let* ((kw (car element))
          (sl (string-downcase (symbol-name kw)))
-         (assign (cdr element))  ; FIXME default?
+         (assign (cdr element))  ; FIXME default? FIXME XXX empty vs explicit nil
          ;;(real-assign (if assign (car assign) (intern (symbol-name kw))))
          (real-assign (intern (symbol-name kw)))
          (default (if assign (car assign) assign)) ; FIXME
          (p (if assign
-                `(progn (setq ,real-assign (norm-arg (cadr args))) (setq args (cddr args)))
-                `(progn (setq ,real-assign t) (setq args (cdr args))))))
-    (list `(,real-assign ,default)
-          `(,(intern (format nil "--~a" sl)) ,p)
+                `(progn (setf ,real-assign (norm-arg (cadr args)))
+                        ;; equivalent of bash shift shift
+                        (setf args (cddr args)))
+                `(progn (setf ,real-assign t)
+                        ;; equivalent of bash shift
+                        (setf args (cdr args))))))
+    (list `(,real-assign ,default)  ; default
+          `(,(intern (format nil "--~a" sl)) ,p)  ; case
           `(cons ',real-assign ,real-assign))))
 
 (defmacro parse-args (&body keywords)
-  "(parse-args (:port port) (:pid pid) (:flag))"
+  "(parse-args (:port port) (:pid pid) (:flag))
+
+   NOTE if the default value if a kwarg is nil rather than
+   empty i.e. (:asdf nil) vs (:asdf) the form with nil will
+   not fail but will be nil unless some value is provided
+   AND it will eat the next kwarg this is probably a misdesign"
   ;;(print (apply #'mapcar #'list (map 'list #'pk keywords)))
   ;;(format *standard-output* "~s~%" keywords)
   ;;`(,@keywords)
   `(quote ,keywords)
   (destructuring-bind (defaults cases returns)
-      (apply #'mapcar #'list (map 'list #'pk keywords))
-    `(let ((args (cdr #+ecl (loop for n from 0 below (si:argc) collect (si:argv n))
-                      #+sbcl sb-ext:*posix-argv*))
+      (apply #'mapcar #'list (map 'list #'process-keyword keywords))
+    `(let ((args (cdr (uiop:raw-command-line-arguments)))
            ,@defaults)
        (do ()
            ((null args) nil)
          (case (intern (car args))
            ,@cases
            (otherwise (progn (format *standard-output* "unhandled: ~s~%" (car args))
-                             (setq args (cdr args))))))
+                             (setf args (cdr args))))))
        (list ,@returns))))
 #+end_src
 
@@ -459,6 +481,8 @@ how-to-use-multiple-arguments-for-awk-with-a-shebang-i-e>
 
 #+header: :shebang "#!/usr/bin/env -S sbcl --script" :tangle-mode (identity #o0755)
 #+begin_src lisp :noweb yes :tangle ./args-test :results output
+<<quicklisp-setup>>
+<<package.lisp>>
 <<parse-args-cli>>
 (format *standard-output* "~s~%" sb-ext:*posix-argv*)
 (format *standard-output* "~s~%" (parse-args (:qq nil)
@@ -467,10 +491,14 @@ how-to-use-multiple-arguments-for-awk-with-a-shebang-i-e>
                                              (:flag)))
 (format t "~s~%" *compile-file-truename*)
 (format t "~s~%" *compile-file-pathname*)
+#+()
+(print (macroexpand '(parse-args (:flag) (:asdf 123))))
 #+end_src
 
 #+header: :shebang "#!/usr/bin/env -S ecl -q -norc -shell"
 #+begin_src lisp  :noweb yes :tangle ./args-test-ecl :results output
+<<quicklisp-setup>>
+<<package.lisp>>
 <<parse-args-cli>>
 (format *standard-output* "~s~%" (loop for n from 0 below (si:argc) collect (si:argv n)))
 (format *standard-output* "~s~%" (parse-args (:qq nil)
@@ -479,6 +507,8 @@ how-to-use-multiple-arguments-for-awk-with-a-shebang-i-e>
                                              (:flag)))
 (format t "~s~%" *compile-file-truename*)
 (format t "~s~%" *compile-file-pathname*)
+#+()
+(print (macroexpand '(parse-args (:flag) (:asdf 123))))
 #+end_src
 
 #+begin_src lisp :exports none :eval never
@@ -565,55 +595,45 @@ Obviously a tradeoff in there somewhere, but seriously wow.
 #+header: :tangle-mode (identity #o0755)
 #+begin_src lisp :noweb yes :tangle ./build-image
 (load "bootstrap-image.lisp")
-#-quicklisp
-(let ((quicklisp-init (merge-pathnames "code/lisp/quicklisp/setup.lisp"
-                                       (user-homedir-pathname))))
-  (when (probe-file quicklisp-init)
-    (load quicklisp-init)))
-;;(push (uiop:truenamize "./") asdf:*central-registry*)
-#+()
-(push (uiop:truenamize #p"~/git/<<project-name-base()>>") ql:*local-project-directories*)  ; FIXME
-#+()
-(ql:quickload :<<project-name-base()>>/bootstrap-image)
-(save-lisp-and-die "git-share-start-small" :toplevel #'main :executable t :compression t)
+(save-lisp-and-die "git-share-sbcl" :toplevel #'main :executable t :compression t)
 #+end_src
 
 #+begin_src lisp :noweb yes :tangle ./bootstrap-image.lisp
-#-quicklisp
-(let ((quicklisp-init (merge-pathnames "code/lisp/quicklisp/setup.lisp"
-                                       (user-homedir-pathname))))
-  (when (probe-file quicklisp-init)
-    (load quicklisp-init)))
-
+<<quicklisp-setup>>
 (push (uiop:truenamize #p"~/git/<<project-name-base()>>") ql:*local-project-directories*)
-;;(ql:quickload :<<project-name-base()>>/start-small)
-(ql:quickload :<<project-name-base()>>/bootstrap-image)
+(ql:quickload :<<project-name-base()>>/bootstrap-helper)
 
+<<bootstrap-common>>
+#+end_src
+
+#+name: bootstrap-common
+#+begin_src lisp :noweb yes :tangle ./bootstrap-image-ecl.lisp
 (defparameter *finished* nil)
 
-<<parse-args-cli>>
-
 (defun main ()
-  (format t "~s~%" sb-ext:*posix-argv*)
-  (let* ((args (parse-args (:port 4242)
-                           (:pid #p"/tmp/<<project-name-base()>>.pid")
-                           (:port-swank 4006)))
+  (format t "~s~%" (uiop:raw-command-line-arguments))
+  (let* ((args (parse-args:parse-args
+                 (:port 4242)
+                 (:pid #p"/tmp/<<project-name-base()>>.pid")
+                 (:port-swank 4006)
+                 (:debug)))
          (*port* (cdr (assoc 'port args)))
          (*path-pid* (cdr (assoc 'pid args)))
-         (*port-swank* (cdr (assoc 'port-swank args))))
+         (*port-swank* (cdr (assoc 'port-swank args)))
+         (*debug* (cdr (assoc 'debug args))))
+    (when *debug*
+      (setq hunchentoot:*catch-errors-p* nil)  ; doesn't seem to be working
+      (enable-debugger))
     (swank:create-server :port *port-swank*)
     (git-share:server-start :port *port*))
 
   (format t "STARTED~%")
   (loop :do
-       (sleep 5)
-       (when *finished*
-         (format t "DONE~%")
-         (git-share:server-stop)
-         #+ecl
-         (si:exit)
-         #+sbcl
-         (sb-ext:quit))))
+    (sleep 5)
+    (when *finished*
+      (format t "DONE~%")
+      (git-share:server-stop)
+      (uiop:quit))))
 #+end_src
 
 It seems like =app-misc/detachtty= may be needed to get this to work.
@@ -675,12 +695,7 @@ https://www.reddit.com/r/Common_Lisp/comments/4n7ly6/daemonizing_common_lisp_ser
 #+header: :shebang "#!/usr/bin/sbcl --script"
 #+header: :tangle-mode (identity #o0755)
 #+begin_src lisp :noweb yes :tangle ./start-small.lisp
-#-quicklisp
-(let ((quicklisp-init (merge-pathnames "code/lisp/quicklisp/setup.lisp"
-                                       (user-homedir-pathname))))
-  (when (probe-file quicklisp-init)
-    (load quicklisp-init)))
-
+<<quicklisp-setup>>
 (push (uiop:truenamize #p"~/git/<<project-name-base()>>") ql:*local-project-directories*)
 (ql:quickload :<<project-name-base()>>/start-small)
 
@@ -772,15 +787,18 @@ option seems to be the best for our use case.
 
 # a good reference for shebangs https://www.cliki.net/Unix%20shell%20scripting
 # #+header: :tangle-mode (identity #o0755)
-#+name: build-ecl
+#+name: build-image-ecl
 #+header: :shebang "#!/usr/bin/env -S ecl -q -norc -shell"
-#+begin_src lisp :tangle ./build-ecl
-(asdf:make-build :git-share/start-small
+#+begin_src lisp :noweb yes :tangle ./build-image-ecl
+<<quicklisp-setup>>
+(push (uiop:truenamize #p"~/git/<<project-name-base()>>") asdf:*central-registry*)
+(asdf:make-build :git-share/bootstrap-helper-ecl
                  :type :program
                  :monolithic t  ;;
                  :move-here #P"./"
                  :epilogue-code '(main))
 #+end_src
+
 #+begin_src lisp
 #+ecl
 (progn
@@ -793,12 +811,7 @@ self daemonizing approach
 #+header: :shebang "#!/usr/bin/sbcl --script"
 #+header: :tangle-mode (identity #o0755)
 #+begin_src lisp :noweb yes :tangle "./daemon.lisp"
-#-quicklisp
-(let ((quicklisp-init (merge-pathnames "code/lisp/quicklisp/setup.lisp"
-                                       (user-homedir-pathname))))
-  (when (probe-file quicklisp-init)
-    (load quicklisp-init)))
-
+<<quicklisp-setup>>
 ;(require 'uiop)
 ;(require 'asdf)
 
@@ -1057,9 +1070,11 @@ Use =dexador= as our http client.
 #<SB-SYS:FD-STREAM for "socket 127.0.0.1:41050, peer: 127.0.0.1:4242" {1007B534A3}>
 :end:
 **** bash/curl
-#+begin_src bash
+#+header: :shebang "#!/usr/bin/env sh"
+#+begin_src bash :var TEST_HOST="localhost" :results output :tangle ./test-curl.sh
 time for i in {0..9999}; do echo $i; done | \
-xargs -P15 -r -n 1 -- curl -X GET http://localhost:4242/git/e6cf3a391686a0b49171b9b195da88e81125bb1e -H
+xargs -P15 -r -n 1 -- curl -s -X GET \
+http://${TEST_HOST}:4242/git/e6cf3a391686a0b49171b9b195da88e81125bb1e -H
 #+end_src
 
 |  time | avg       |
