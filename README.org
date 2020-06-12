@@ -43,6 +43,21 @@ referent. In many cases this could be automatically extracted to provide more 'P
 for the pure hash identifiers.
 
 * Design
+** issues
+Validation that the remote's first commit matches the asserted value is important.
+If there is a trusted process that is making the submissions that would work as well.
+You could pretty much have a giant batch of crawlers for these since there isn't really
+a need to keep the data around, clone the repo and find the parentless commits for all
+heads, submit/validate the entry in the database, and then rm the repo and go get the next one.
+
+If using =git-share= in a local agent configuration (not yet implemented) then this
+is less relevant since the crawler and the submitter are essentially the same. When
+coordinating between nodes run by individuals we will have to deal with the validation and
+verification issue as well.
+
+If it turns out that something like this is useful, it might make sense to try to get
+it implemented as part of the stock information that remote git repos can answer without
+having to get the whole repo.
 ** endpoints
 *** =/sexp=
 port 80 endpoint that accepts sexps and nothing else
@@ -443,71 +458,36 @@ GRANT INSERT (first_commit, git_remote)
                         (setq args (cdr args))))))
   (print (list port pid)))
 #+end_src
-*** deployment
-**** daemon
-self daemonizing approach
-#+header: :shebang "#!/usr/bin/sbcl --script"
-#+header: :tangle-mode (identity #o0755)
-#+begin_src lisp :noweb yes :tangle "./daemon.lisp"
-#-quicklisp
-(let ((quicklisp-init (merge-pathnames "code/lisp/quicklisp/setup.lisp"
-                                       (user-homedir-pathname))))
-  (when (probe-file quicklisp-init)
-    (load quicklisp-init)))
+*** development
+**** slime
+This block only needs to be run once, after that any further modifications can be
+made by executing the ref:core or any of the other blocks block again without needing
+to run this block again.
 
-;(require 'uiop)
-;(require 'asdf)
-
-(push (uiop:truenamize #p"~/git/NOFORK/cl-daemonize") ql:*local-project-directories*)
-(push (uiop:truenamize #p"~/git/<<project-name-base()>>") ql:*local-project-directories*)
-(ql:quickload :<<project-name-base()>>/daemon)
-;(ql:quickload :<<project-name-base()>>)
-;(ql:quickload '(cl-daemonize swank))
-;(push (uiop:truenamize #p"~/git/<<project-name-base()>>") asdf:*central-registry*)
-;(asdf:load-system :<<project-name-base()>>/daemon)  ; fixme recursion surely
-
-;(load (uiop:truenamize "~/.emacs.d/elpa/slime-20191224.2328/swank-loader.lisp"))
-
-(in-package :<<project-name-base()>>/daemon)
-
-(defparameter *finished* nil)
-
-<<parse-args-cli>>
-
-(let ((args (parse-args (:port 4242)
-                        (:pid #p"/tmp/<<project-name-base()>>.pid")
-                        ;; FIXME apparently can't log into the git folder or something !?
-                        (:path-log-out #p"/tmp/debug-out.log")
-                        (:path-log-err #p"/tmp/debug-err.log"))))
-     (defparameter *port* (cdr (assoc 'port args)))
-     (defparameter *path-pid* (cdr (assoc 'pid args)))
-     (defparameter *path-log-out* (cdr (assoc 'path-log-out args)))
-     (defparameter *path-log-err* (cdr (assoc 'path-log-err args)))
-)
-
-(format *error-output* "~a ~a~%" *port* *path-pid*)
-(format *standard-output* "~a ~a~%" *port* *path-pid*)
-
-(cl-daemonize:daemonize :out *path-log-out* ;"output.log"
-                        :err *path-log-err* ;"error.log"
-                        :pid *path-pid*
-                        :stop (lambda (&rest args)
-                                (declare (ignore args))
-                                (setf *finished* t)))
-
-;(swank-loader:init)
-(swank:create-server :port 4006)
-(git-share:server-start :port *port*)
-
-(format *standard-output* "STARTED~%")
-(loop :do
-     (sleep 1)
-     (when *finished*
-       (format *standard-output* "DONE~%")
-       (git-share:server-stop)
-       (sb-ext:quit)))
-
+Also apparently if we don't do testing in =cl-user= or something like that then
+there is a problem finding the database connection? Pretty sure that is a bug on my end.
+#+name: slime-repl-devel
+#+caption: run this block if you are going to be doing interactive development in the repl
+#+header: :comments link
+#+begin_src lisp :noweb yes
+;;(push :slime *features*)
+;;#+slime(progn
+(ql:quickload :cl-who)
+(ql:quickload :hunchentoot)
+(ql:quickload :easy-routes)
+(ql:quickload :postmodern)
+(rename-package :postmodern :postmodern '(psql))
+;;)
+(setq hunchentoot:*catch-errors-p* nil)
+<<core>>
+(git-share:server-start :port 4242)
 #+end_src
+
+When you are done you can run the following block.
+#+begin_src lisp
+(git-share:server-stop)
+#+end_src
+*** deployment
 **** SLaD
 So. Of all the many ways that one can try to package this thing to run
 this is the one that amuses me the most deeply. 15mb. Sure you need a
@@ -708,24 +688,90 @@ start_pre() {
     checkpath --directory --owner ${command_owner} --mode 0775 "${LOG_LOC}"
 }
 #+end_src
-*** core
-Connection handling
-https://www.mail-archive.com/postmodern-devel@common-lisp.net/msg00348.html
-https://sites.google.com/site/sabraonthehill/postmodern-examples/postmodern-connections
+**** daemon :old:
+self daemonizing approach
+#+header: :shebang "#!/usr/bin/sbcl --script"
+#+header: :tangle-mode (identity #o0755)
+#+begin_src lisp :noweb yes :tangle "./daemon.lisp"
+#-quicklisp
+(let ((quicklisp-init (merge-pathnames "code/lisp/quicklisp/setup.lisp"
+                                       (user-homedir-pathname))))
+  (when (probe-file quicklisp-init)
+    (load quicklisp-init)))
 
+;(require 'uiop)
+;(require 'asdf)
+
+(push (uiop:truenamize #p"~/git/NOFORK/cl-daemonize") ql:*local-project-directories*)
+(push (uiop:truenamize #p"~/git/<<project-name-base()>>") ql:*local-project-directories*)
+(ql:quickload :<<project-name-base()>>/daemon)
+;(ql:quickload :<<project-name-base()>>)
+;(ql:quickload '(cl-daemonize swank))
+;(push (uiop:truenamize #p"~/git/<<project-name-base()>>") asdf:*central-registry*)
+;(asdf:load-system :<<project-name-base()>>/daemon)  ; fixme recursion surely
+
+;(load (uiop:truenamize "~/.emacs.d/elpa/slime-20191224.2328/swank-loader.lisp"))
+
+(in-package :<<project-name-base()>>/daemon)
+
+(defparameter *finished* nil)
+
+<<parse-args-cli>>
+
+(let ((args (parse-args (:port 4242)
+                        (:pid #p"/tmp/<<project-name-base()>>.pid")
+                        ;; FIXME apparently can't log into the git folder or something !?
+                        (:path-log-out #p"/tmp/debug-out.log")
+                        (:path-log-err #p"/tmp/debug-err.log"))))
+     (defparameter *port* (cdr (assoc 'port args)))
+     (defparameter *path-pid* (cdr (assoc 'pid args)))
+     (defparameter *path-log-out* (cdr (assoc 'path-log-out args)))
+     (defparameter *path-log-err* (cdr (assoc 'path-log-err args)))
+)
+
+(format *error-output* "~a ~a~%" *port* *path-pid*)
+(format *standard-output* "~a ~a~%" *port* *path-pid*)
+
+(cl-daemonize:daemonize :out *path-log-out* ;"output.log"
+                        :err *path-log-err* ;"error.log"
+                        :pid *path-pid*
+                        :stop (lambda (&rest args)
+                                (declare (ignore args))
+                                (setf *finished* t)))
+
+;(swank-loader:init)
+(swank:create-server :port 4006)
+(git-share:server-start :port *port*)
+
+(format *standard-output* "STARTED~%")
+(loop :do
+     (sleep 1)
+     (when *finished*
+       (format *standard-output* "DONE~%")
+       (git-share:server-stop)
+       (sb-ext:quit)))
+
+#+end_src
+*** core
+**** Tangle to file block
 #+name: core
+#+header: :comments link
 #+begin_src lisp :noweb yes :tangle ./core.lisp
-#-(and)(progn
-         (ql:quickload :cl-who)
-         (ql:quickload :hunchentoot)
-         (ql:quickload :easy-routes)
-         (ql:quickload :postmodern)
-         (rename-package :postmodern :postmodern '(psql))
-         )
 (in-package :<<project-name-base()>>)
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (rename-package :postmodern :postmodern '(psql)))
+<<connection>>
+<<queries>>
+<<helpers>>
+<<routes>>
+#+end_src
+**** Connection handling
+https://www.mail-archive.com/postmodern-devel@common-lisp.net/msg00348.html
+https://sites.google.com/site/sabraonthehill/postmodern-examples/postmodern-connections
 
+#+name: connection
+#+header: :comments link
+#+begin_src lisp :noweb yes
 #-(and)
 (defparameter *db-connection* (postmodern:connect-toplevel
                                <<db-name>>
@@ -759,14 +805,10 @@ https://sites.google.com/site/sabraonthehill/postmodern-examples/postmodern-conn
 (defun format-git-id (first-commit &optional (ref ""))
   (format nil "Id: git:~a:~a" first-commit ref))
 
-<<queries>>
-<<helpers>>
-<<routes>>
 #+end_src
-
-Queries
+**** Queries
 #+name: queries
-#+begin_src lisp
+#+begin_src lisp :results none
 ;;; queries
 
 (defun query-insert-fc (first-commit git-remote)
@@ -803,10 +845,9 @@ Queries
       (query-select-fc-remotes first-commit)))
 
 #+end_src
-
-Helper functions
+**** Helper functions
 #+name: helpers
-#+begin_src lisp
+#+begin_src lisp :results none
 ;;; helpers
 
 (defun abort-db (condition)
@@ -829,58 +870,83 @@ Helper functions
                    (abort-web 404))))
           (t (abort-web 404)))))
 #+end_src
-
-Routes
+**** Routes
 #+name: routes
-#+begin_src lisp
+#+begin_src lisp :results none
 ;;; routes
 (easy-routes:defroute post-git-fc
- ("/git/:first-commit" :method :post) (remote)
- (setf (hunchentoot:content-type*) "text/plain")
- ;; if known remote pattern check for first commit
- ;; if config parameter set to check all clone and validate first commit
- ;; if everything checks out add remote and first commit to database
- (setf (hunchentoot:return-code*) 201)  ; 200 returns on unique constraint violation
- (ignore-errors  ; WHY DO WE HAVE TO USE THIS !?!?!!
- (query-insert-fc first-commit remote))
- ;; wow ... it just... works ...
- (format nil "Register: git:~a -> ~a" first-commit remote))
+    ("/git/:first-commit" :method :post) (remote)
+  (setf (hunchentoot:content-type*) "text/plain")
+  ;; if known remote pattern check for first commit
+  ;; if config parameter set to check all clone and validate first commit
+  ;; if everything checks out add remote and first commit to database
+  (setf (hunchentoot:return-code*) 201)  ; 200 returns on unique constraint violation
+  (ignore-errors  ; WHY DO WE HAVE TO USE THIS !?!?!!
+  (query-insert-fc first-commit remote))
+  ;; wow ... it just... works ...
+  (format nil "Register: git:~a -> ~a" first-commit remote))
 
 (easy-routes:defroute get-resolve-id
- ("/resolve/:id" :method :get) ()
- (setf (hunchentoot:content-type*) "text/plain")
- (format nil "Id ~a -> ~a" id (parse-id id)))
+    ("/resolve/:id" :method :get) ()
+  (print (hunchentoot:headers-in hunchentoot:*request*))
+  (if nil
+      (progn 
+        (setf (hunchentoot:content-type*) "text/plain")
+        (format nil "Id ~a -> ~a" id (parse-id id)))
+      (progn
+        (setf (hunchentoot:content-type*) "text/plain")
+        (let ((remotes (parse-id id)))
+          (if remotes
+              (caar remotes)  ; list of lists coming back from the query, which is bad
+              (setf (hunchentoot:return-code*) 404))))))
 
 (easy-routes:defroute get-git-fc
- ("/git/:first-commit" :method :get) ()
- (setf (hunchentoot:content-type*) "text/plain")
- (let ((results (query-select-fc-remotes first-commit)))
-   (format nil "Id: git:~a -> ~a" first-commit results)))
+    ("/git/:first-commit" :method :get) ()
+  (setf (hunchentoot:content-type*) "text/plain")
+  (let ((results (query-select-fc-remotes first-commit)))
+    (format nil "Id: git:~a -> ~a" first-commit results)))
 
 (easy-routes:defroute get-git-fc-ref
- ("/git/:first-commit/:ref" :method :get) ()
- (setf (hunchentoot:content-type*) "text/plain")
- (format-git-id first-commit ref))
+    ("/git/:first-commit/:ref" :method :get) ()
+  (setf (hunchentoot:content-type*) "text/plain")
+  (format-git-id first-commit ref))
 #+end_src
 *** test
-#+begin_src bash :results drawer
-curl -X POST http://localhost:4242/git/e6cf3a391686a0b49171b9b195da88e81125bb1e?remote=https://github.com/tgbugs/git-share.git
+**** cl
+Use =dexador= as our http client.
+#+begin_src lisp :results none
+(ql:quickload :dexador)
+#+end_src
+
+#+begin_src lisp :results drawer
+(dex:post (concatenate 'string
+                       "http://localhost:4242/git/e6cf3a391686a0b49171b9b195da88e81125bb1e"
+                       "?remote=https://github.com/tgbugs/git-share.git"))
 #+end_src
 
 #+RESULTS:
 :results:
+"Register: git:e6cf3a391686a0b49171b9b195da88e81125bb1e -> https://github.com/tgbugs/git-share.git"
+200
+#<HASH-TABLE :TEST EQUAL :COUNT 4 {1007F42E83}>
+#<QURI.URI.HTTP:URI-HTTP http://localhost:4242/git/e6cf3a391686a0b49171b9b195da88e81125bb1e?remote=https://github.com/tgbugs/git-share.git>
+#<SB-SYS:FD-STREAM for "socket 127.0.0.1:41104, peer: 127.0.0.1:4242" {1007F405E3}>
 :end:
 
-#+begin_src bash :results drawer
-curl -X GET http://localhost:4242/git/e6cf3a391686a0b49171b9b195da88e81125bb1e
+#+begin_src lisp :results drawer
+(dex:get "http://localhost:4242/git/e6cf3a391686a0b49171b9b195da88e81125bb1e")
 #+end_src
 
 #+RESULTS:
 :results:
-Id: git:e6cf3a391686a0b49171b9b195da88e81125bb1e -> ((git@github.com:tgbugs/git-share.git)
-                                                     (https://github.com/tgbugs/git-share.git))
+"Id: git:e6cf3a391686a0b49171b9b195da88e81125bb1e -> ((git@github.com:tgbugs/git-share.git)
+                                                     (https://github.com/tgbugs/git-share.git))"
+200
+#<HASH-TABLE :TEST EQUAL :COUNT 4 {1007B55C73}>
+#<QURI.URI.HTTP:URI-HTTP http://localhost:4242/git/e6cf3a391686a0b49171b9b195da88e81125bb1e>
+#<SB-SYS:FD-STREAM for "socket 127.0.0.1:41050, peer: 127.0.0.1:4242" {1007B534A3}>
 :end:
-
+**** bash/curl
 #+begin_src bash
 time for i in {0..9999}; do echo $i; done | \
 xargs -P15 -r -n 1 -- curl -X GET http://localhost:4242/git/e6cf3a391686a0b49171b9b195da88e81125bb1e -H
@@ -898,6 +964,8 @@ xargs -P15 -r -n 1 -- curl -X GET http://localhost:4242/git/e6cf3a391686a0b49171
 #+TBLFM: @2$2=vmean(@2$1..@>$1)
 #+TBLFM: @3$2=(10000 / @2$2)
 
+**** queries
+# TODO use =with-connection= instead
 Run this in your repl if you are going to run these directly.
 Might be able to unify =with-connection= and =query= for both
 repl and server, aka swank and hunchentoot. As long as we don't
@@ -924,6 +992,7 @@ namespace this should be ok.
 (defparameter *db-connection*
   (postmodern:connect-toplevel "git_share_test" "git-share-user" "gsu123" "localhost"))
 #+end_src
+
 
 #+begin_src lisp
 (postmodern:query (:select '* :from 'first_commits))
