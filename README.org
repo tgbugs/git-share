@@ -26,7 +26,7 @@ emacs --batch \
       --eval "(unless ((lambda (a b) (or (string> a b) (string= a b))) (org-version) \"9.3\") (message (format \"your org is too old! %s < 9.3 try loading ~/git/orgstrap/init.el\" (org-version))) (kill-emacs 1))" \
       --eval "(org-babel-tangle-file \"README.org\")" \
       --load org-elisp-setup-hack.el \
-      --eval "(org-babel-tangle-file \"README.org\")"
+      --eval "(org-babel-tangle-file \"README.org\")" &&
 rm org-elisp-setup-hack.el
 #+end_src
 ** Dependencies
@@ -601,7 +601,7 @@ Obviously a tradeoff in there somewhere, but seriously wow.
 
 # FIXME final executable location should be ./bin
 #+name: build-image-sbcl
-#+header: :shebang "#!/usr/bin/sbcl --script"
+#+header: :shebang "#!/usr/bin/env -S sbcl --script"
 #+begin_src lisp :noweb yes :tangle ./bin/build-image-sbcl :mkdirp yes
 <<quicklisp-setup>>
 (push (uiop:truenamize #p"~/git/<<project-name-base()>>") ql:*local-project-directories*)
@@ -1079,7 +1079,7 @@ Use =dexador= as our http client.
 #+begin_src bash :var TEST_HOST="localhost" :results output :tangle ./t/test-curl.sh
 time for i in {0..9999}; do echo $i; done | \
 xargs -P15 -r -n 1 -- curl -s -X GET \
-http://${TEST_HOST}:4242/git/e6cf3a391686a0b49171b9b195da88e81125bb1e -H
+http://${TEST_HOST}:4242/git/e6cf3a391686a0b49171b9b195da88e81125bb1e -H 2>&1 > /dev/null
 #+end_src
 
 |  time | avg       |
