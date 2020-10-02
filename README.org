@@ -1,7 +1,9 @@
+# -*- orgstrap-cypher: sha256; orgstrap-norm-func-name: orgstrap-norm-func--prp-1\.0; orgstrap-block-checksum: efbc1a480b88210ad7044962343e07c2adddbe9294aa8ed3dd45a8a48443f6a3; -*-
+# [[orgstrap][jump to the orgstrap block for this file]]
 #+TITLE: git-share a git repository resolver
 
 # FIXME this needs to be called before tangling can continue ... how safely ...
-#+call: def-project-name-base()
+#+call: def-project-name-base() :var reset=(identity nil)
 
 #+name: project-description-short
 #+header: :results value drawer
@@ -116,9 +118,8 @@ org-babel-exp-do-export
 ** elisp
 #+name: def-project-name-base
 #+header: :noweb yes :results value :cache yes :lexical yes
-#+header: :tangle ./org-elisp-setup-hack.el
 #+begin_src emacs-lisp :exports none :var reset=(identity nil)
-(when (or (not (boundp '--git-share-elisp-loaded)) reset)
+(when (or (not (boundp '--git-share-elisp-loaded)) (and (boundp 'reset) reset))
 (defvar *-gsell-* t)
 (defun project-name (&optional suffix)
   "project name without - separator"
@@ -386,7 +387,7 @@ GRANT INSERT (first_commit, git_remote)
   (:use :cl)
   (:export #:parse-args))
 
-#+()
+,#+()
 (defpackage #:<<project-name-base()>>/daemon
   (:use
    #:cl
@@ -425,18 +426,18 @@ GRANT INSERT (first_commit, git_remote)
 ,#+()
 (defsystem :<<project-name-base()>>/daemon
   :depends-on (:<<project-name-base()>>
-                                   "cl-daemonize"
-                                   "swank")
+               "cl-daemonize"
+               "swank")
   ;;:components ((:file "daemon"))  ; explicitly don't load the file since it is a script
   )
 
 (defsystem :<<project-name-base()>>/start-small
   :depends-on (:<<project-name-base()>>
-                                   "swank"))
+               "swank"))
 
 (defsystem :<<project-name-base()>>/bootstrap-image
   :depends-on (:<<project-name-base()>>
-                                   "swank")
+               #:swank)
   :components ((:module "src"
                 :components ((:file "bootstrap-image")))))
 
@@ -522,7 +523,7 @@ how-to-use-multiple-arguments-for-awk-with-a-shebang-i-e>
 (print (macroexpand '(parse-args (:flag) (:asdf 123))))
 #+end_src
 
-#+header: :shebang "#!/usr/bin/env -S ecl -q -norc -shell" :mkdirp yes
+#+header: :shebang "#!/usr/bin/env -S ecl -q --norc --shell" :mkdirp yes
 #+begin_src lisp  :noweb yes :tangle ./test/args-test-ecl :results output
 <<quicklisp-setup>>
 <<package.lisp>>
@@ -620,13 +621,14 @@ And WOW the memory savings compared to running the =start-small= version.
 Obviously a tradeoff in there somewhere, but seriously wow.
 
 # FIXME final executable location should be ./bin
+# #+header: :var project-path=(identity default-directory)
 #+name: build-image-sbcl
 #+header: :shebang "#!/usr/bin/env -S sbcl --script"
 #+begin_src lisp :noweb yes :tangle ./bin/build-image-sbcl :mkdirp yes
 <<quicklisp-setup>>
 (push (uiop:truenamize #p"~/git/<<project-name-base()>>") ql:*local-project-directories*)
 (ql:quickload :<<project-name-base()>>/bootstrap-image)
-(save-lisp-and-die "git-share-sbcl" :toplevel #'main :executable t :compression t)
+(save-lisp-and-die "bin/git-share-sbcl" :toplevel #'main :executable t :compression t)
 #+end_src
 
 #+name: bootstrap-common
@@ -637,7 +639,7 @@ Obviously a tradeoff in there somewhere, but seriously wow.
   (format t "~s~%" (uiop:raw-command-line-arguments))
   (let* ((args (parse-args:parse-args
                  (:port 4242)
-                 (:pid #p"/tmp/<<project-name-base()>>.pid")
+                 (:pid #p"/tmp/<<project-name-base()>>.pid") ; FIXME not portable and dangerous
                  (:port-swank 4006)
                  (:debug)))
          (*port* (cdr (assoc 'port args)))
@@ -645,7 +647,7 @@ Obviously a tradeoff in there somewhere, but seriously wow.
          (*port-swank* (cdr (assoc 'port-swank args)))
          (*debug* (cdr (assoc 'debug args))))
     (when *debug*
-      (setq hunchentoot:*catch-errors-p* nil)  ; doesn't seem to be working
+      (setq hunchentoot:*catch-errors-p* nil) ; doesn't seem to be working
       (enable-debugger))
     (swank:create-server :port *port-swank*)
     (git-share:server-start :port *port*))
@@ -810,18 +812,40 @@ The best reference for this is
 System-building.html#Compiling-with-ECL> and the =asdf:make-build=
 option seems to be the best for our use case.
 
+# https://github.com/earl-ducaine/stupid-ecl-tricks-1#embedding-swank-in-a-c-application
+# https://stackoverflow.com/questions/48103501/deploying-common-lisp-web-applications
+# https://www.reddit.com/r/Common_Lisp/comments/hicmyt
+
+I think in order to do this correctly I have to clone swank or get a copy of
+the swank files and then create a new asd file with defsystems for the specific
+files that need to be included in the image. The reason for this is that the
+upstream swank asd file only includes the swank loader and does not include
+any of the other parts of the system because the loader takes care of them.
+However this causes problems when compiling with asdf:make-build since the
+compiler has no idea that those files are needed.
+
 # a good reference for shebangs https://www.cliki.net/Unix%20shell%20scripting
 # #+header: :tangle-mode (identity #o0755)
 #+name: build-image-ecl
-#+header: :shebang "#!/usr/bin/env -S ecl -q -norc -shell"
+#+header: :shebang "#!/usr/bin/env -S ecl -q --norc --shell"
 #+begin_src lisp :noweb yes :tangle ./bin/build-image-ecl :mkdirp yes
+,#+()
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (format t "aaaaaaaaaaaaaaaaaaa~%")
+  ;;(load "/usr/lib64/ecl-20.4.24/ecl-quicklisp.fas")
+  (load "/usr/lib64/ecl-20.4.24/asdf.fas"))
 <<quicklisp-setup>>
 (push (uiop:truenamize #p"~/git/<<project-name-base()>>") asdf:*central-registry*)
 (asdf:make-build :git-share/bootstrap-image
                  :type :program
-                 :monolithic t  ;;
+                 :monolithic t
                  :move-here #P"./"
+                 ;;:prologue-code '(require :swank)
                  :epilogue-code '(main))
+;; note that :overwrite has slightly different semantics and I'm not
+;; I'm not entirely sure which one makes more sense in this context
+;; nor what the exact differences in semantics are across implementations
+(rename-file #p"./bootstrap-image" #p"./bin/git-share-ecl" :if-exists :supersede)
 #+end_src
 
 #+begin_src lisp
@@ -1204,3 +1228,66 @@ git-share-all () {
 # git-share-first-commit
 # git-share-all
 #+end_src
+* Bootstrap :noexport:
+#+name: orgstrap
+#+begin_src elisp :lexical yes :noweb yes
+<<def-project-name-base>>
+
+(defvar orgstrap-tangle-on-open nil "Override this for emacs --batch")
+
+(defvar orgstrap-build-on-open nil "Override this for emacs --batch")
+
+(defun orgstrap---make ()
+  "local function to run any extra steps required to build outputs"
+  (let ((exec-path
+         (cons (concat default-directory "bin")
+               exec-path)))
+    (concat
+     "\nsbcl build:\n"
+     (run-command "build-image-sbcl")
+     "\necl build:\n"
+     (run-command "build-image-ecl"))))
+
+(defun orgstrap---make-not-quite ()
+  "local function to run any extra steps required to build outputs"
+  ' ; unfortunately the semantics of --eval and progn mean that we
+  ;; can't use this approach easily because everything is read at
+  ;; the same time so the namespaces for uiop: and ql: are missing
+  (prog1 ;;concat
+      ;;"\nsbcl build:\n"
+      (orgstrap--with-block "build-image-sbcl"
+        (let ((rbody (concat "(progn\n" body "\n)"))
+              (print-escape-newlines nil))
+          (message "%S" rbody)
+          (run-command "sbcl"
+                       ;;"--script"
+                       "--noinform"
+                       "--disable-ldb"
+                       "--lose-on-corruption"
+                       "--end-runtime-options"
+                       "--noprint"
+                       ;;"--no-sysinit"
+                       "--no-userinit"
+                       "--disable-debugger"
+                       "--eval" rbody
+                       "--eval" "(sb-ext:quit)")))
+    "\necl build:\n"
+    (orgstrap--with-block "build-image-ecl"
+      ;; for some reason the script version of this works without issue
+      ;; but this version can't find
+      (let ((rbody (concat "(progn\n" body "\n)"))
+            (print-escape-newlines nil))
+        (message "%S" rbody)
+        (run-command "ecl" "-q" "--norc" "--eval" rbody)))))
+
+(when (or orgstrap-tangle-on-open orgstrap-build-on-open)
+  (org-babel-tangle)
+  (when orgstrap-build-on-open
+    (orgstrap---make)))
+#+end_src
+
+** Local Variables :noexport:
+
+# Local Variables:
+# eval: (progn (setq-local orgstrap-min-org-version "8.2.10") (let ((actual (org-version)) (need orgstrap-min-org-version)) (or (fboundp #'orgstrap--confirm-eval) (not need) (string< need actual) (string= need actual) (error "Your Org is too old! %s < %s" actual need))) (defun orgstrap-norm-func--prp-1\.0 (body) (let ((print-quoted nil)) (prin1-to-string (read (concat "(progn\n" body "\n)"))))) (unless (boundp 'orgstrap-norm-func) (defvar orgstrap-norm-func orgstrap-norm-func-name)) (defun orgstrap-norm-embd (body) (funcall orgstrap-norm-func body)) (unless (fboundp #'orgstrap-norm) (defalias 'orgstrap-norm #'orgstrap-norm-embd)) (defun orgstrap-org-src-coderef-regexp (_fmt &optional label) (let ((fmt org-coderef-label-format)) (format "\\([:blank:]*\\(%s\\)[:blank:]*\\)$" (replace-regexp-in-string "%s" (if label (regexp-quote label) "\\([-a-zA-Z0-9_][-a-zA-Z0-9_ ]*\\)") (regexp-quote fmt) nil t)))) (unless (fboundp #'org-src-coderef-regexp) (defalias 'org-src-coderef-regexp #'orgstrap-org-src-coderef-regexp)) (defun orgstrap--expand-body (info) (let ((coderef (nth 6 info)) (expand (if (org-babel-noweb-p (nth 2 info) :eval) (org-babel-expand-noweb-references info) (nth 1 info)))) (if (not coderef) expand (replace-regexp-in-string (org-src-coderef-regexp coderef) "" expand nil nil 1)))) (defun orgstrap--confirm-eval-portable (lang body) (not (and (member lang '("elisp" "emacs-lisp")) (let* ((body (orgstrap--expand-body (org-babel-get-src-block-info))) (body-normalized (orgstrap-norm body)) (content-checksum (intern (secure-hash orgstrap-cypher body-normalized)))) (eq orgstrap-block-checksum content-checksum))))) (defalias 'orgstrap--confirm-eval #'orgstrap--confirm-eval-portable) (let ((ocbe org-confirm-babel-evaluate)) (setq-local orgstrap-norm-func orgstrap-norm-func-name) (setq-local org-confirm-babel-evaluate #'orgstrap--confirm-eval) (unwind-protect (save-excursion (org-babel-goto-named-src-block "orgstrap") (org-babel-execute-src-block)) (setq-local org-confirm-babel-evaluate ocbe))))
+# End:
