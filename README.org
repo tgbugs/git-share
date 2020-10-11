@@ -1,4 +1,4 @@
-# -*- orgstrap-cypher: sha256; orgstrap-norm-func-name: orgstrap-norm-func--prp-1\.0; orgstrap-block-checksum: efbc1a480b88210ad7044962343e07c2adddbe9294aa8ed3dd45a8a48443f6a3; -*-
+# -*- orgstrap-cypher: sha256; orgstrap-norm-func-name: orgstrap-norm-func--prp-1\.1; orgstrap-block-checksum: 847a3872b2f79478c94a1cb9c0689121e06b7867fbf542b3433f72030c60cc63; -*-
 # [[orgstrap][jump to the orgstrap block for this file]]
 #+TITLE: git-share a git repository resolver
 
@@ -134,7 +134,7 @@ org-babel-exp-do-export
     nil 'literal))
 (defun project-db-name ()
   "<<db-name>>")
-(setq --git-share-elisp-loaded (if reset (current-time-string) t)))
+(setq --git-share-elisp-loaded (if (and (boundp 'reset) reset) (current-time-string) t)))
 #+end_src
 ** SQL
 :PROPERTIES:
@@ -1222,6 +1222,7 @@ git-share-first-commit () {
     # TODO always push to the local git-share instance first (sigh c)
     # and that will then deal with connecting to federated servers
 }
+
 git-share-all () {
     git remote get-url --all origin
 }
@@ -1230,7 +1231,7 @@ git-share-all () {
 #+end_src
 * Bootstrap :noexport:
 #+name: orgstrap
-#+begin_src elisp :lexical yes :noweb yes
+#+begin_src elisp :lexical yes :noweb yes :results none
 <<def-project-name-base>>
 
 (defvar orgstrap-tangle-on-open nil "Override this for emacs --batch")
