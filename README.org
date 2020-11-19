@@ -523,7 +523,7 @@ how-to-use-multiple-arguments-for-awk-with-a-shebang-i-e>
 #+end_src
 
 #+header: :shebang "#!/usr/bin/env -S ecl -q --norc --shell" :mkdirp yes
-#+begin_src lisp  :noweb yes :tangle ./test/args-test-ecl :results output
+#+begin_src lisp :noweb yes :tangle ./test/args-test-ecl :results output
 <<quicklisp-setup>>
 <<package.lisp>>
 <<parse-args-cli>>
