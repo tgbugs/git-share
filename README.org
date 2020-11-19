@@ -1233,19 +1233,44 @@ git-share-all () {
 #+begin_src elisp :lexical yes :noweb yes :results none
 <<def-project-name-base>>
 
-(defvar orgstrap-tangle-on-open nil "Override this for emacs --batch")
+(defvar orgstrap-do-tangle nil "Override this for emacs --batch")
 
-(defvar orgstrap-build-on-open nil "Override this for emacs --batch")
+(defvar orgstrap-do-build nil "Override this for emacs --batch")
 
-(defvar orgstrap-system-packages nil
+(defvar orgstrap-do-packages-system nil
   "Control whether to run code that fetches and installs external
 dependencies. NOTE This implies `orgstrap-packages' t!")
 
 ;; TODO consider whether using an enumerate value might make more sense
 ;; e.g. orgstrap-deps '(nil :emacs :system) and then blocks could set
 ;; their requirements?
-(defvar orgstrap-emacs-packages nil
+(defvar orgstrap-do-packages-emacs nil
   "Control whether to run code that fetchs and installs elisp packages.")
+
+;; minimal reval
+
+(unless (featurep 'reval)
+  (defun reval-minimal (cypher checksum path-or-url &rest _alts)
+    (let ((o url-handler-mode))
+      (url-handler-mode)
+      (unwind-protect
+          (when (file-exists-p path-or-url)
+            (let* ((buffer (find-file-noselect path-or-url))
+                   (buffer-checksum (intern (secure-hash cypher buffer))))
+              (if (eq buffer-checksum checksum)
+                  (eval-buffer buffer)
+                (kill-buffer buffer)
+                (error "reval: checksum mismatch! %s" path-or-url))))
+        (unless o
+          (url-handler-mode 0)))))
+  (defalias 'reval #'reval-minimal))
+
+;; ow
+
+(unless (featurep 'ow-min)
+  (reval 'sha256 '3282d9328e05a12595ffc13e5afbeb3b3a76f1e3c45d50a53df39c2afd6ca341 "https://raw.githubusercontent.com/tgbugs/orgstrap/1e1fa08f9c1c059b393f737fcf19b55082bf660/ow-min.el"))
+
+;; local defuns
 
 (defun orgstrap---make ()
   "local function to run any extra steps required to build outputs"
@@ -1301,16 +1326,26 @@ get-emacs.el.sh.ps1 as the basis for this since it can be run as root.
 "
 )
 ;; system packages go first in case elisp packages depend on them
-(when orgstrap-system-packages
+(when orgstrap-do-packages-system
   (orgstrap---system))
 
-(when (or orgstrap-system-packages orgstrap-emacs-packages)
+(when (or orgstrap-do-packages-system orgstrap-do-packages-emacs)
   (orgstrap---packages))
 
-(when (or orgstrap-tangle-on-open orgstrap-build-on-open)
+(when (or orgstrap-do-tangle orgstrap-do-build)
   (org-babel-tangle)
-  (when orgstrap-build-on-open
+  (when orgstrap-do-build
     (orgstrap---make)))
+
+;; TODO org-babel-do-load-languages
+(org-babel-do-load-languages
+   'org-babel-load-languages
+   '((lisp . t)))
+
+;; TODO slime (needs reval) have to set inferior lisp etc
+(condition-case nil
+  (require 'slime)
+  (error (package-install 'slime)))
 #+end_src
 
 #+name orgstrap-system
