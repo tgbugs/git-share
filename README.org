@@ -1102,6 +1102,10 @@ Use =dexador= as our http client.
 (ql:quickload :dexador)
 #+end_src
 
+# NOTE dexador requires libss libcrypto and libz
+# so on gentoo if you have portage then you have what you need
+# in all likelihood explicitly emerge -1q openssl sys-libs/zlib
+
 #+begin_src lisp :results drawer
 (dex:post (concatenate 'string
                        "http://localhost:4242/git/e6cf3a391686a0b49171b9b195da88e81125bb1e"
@@ -1238,14 +1242,10 @@ git-share-all () {
 (defvar orgstrap-do-build nil "Override this for emacs --batch")
 
 (defvar orgstrap-do-packages-system nil
-  "Control whether to run code that fetches and installs external
-dependencies. NOTE This implies `orgstrap-packages' t!")
+  "Install system packages.")
 
-;; TODO consider whether using an enumerate value might make more sense
-;; e.g. orgstrap-deps '(nil :emacs :system) and then blocks could set
-;; their requirements?
 (defvar orgstrap-do-packages-emacs nil
-  "Control whether to run code that fetchs and installs elisp packages.")
+  "Install Emacs packages.")
 
 ;; minimal reval
 
@@ -1338,9 +1338,10 @@ get-emacs.el.sh.ps1 as the basis for this since it can be run as root.
     (orgstrap---make)))
 
 ;; TODO org-babel-do-load-languages
-(org-babel-do-load-languages
+(unless (alist-get 'lisp org-babel-load-languages)
+  (org-babel-do-load-languages
    'org-babel-load-languages
-   '((lisp . t)))
+   '((lisp . t))))
 
 ;; TODO slime (needs reval) have to set inferior lisp etc
 (condition-case nil
@@ -1348,7 +1349,7 @@ get-emacs.el.sh.ps1 as the basis for this since it can be run as root.
   (error (package-install 'slime)))
 #+end_src
 
-#+name orgstrap-system
+#+name: orgstrap-system
 #+begin_src bash :dir /su::
 id
 #+end_src
