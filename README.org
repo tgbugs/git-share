@@ -366,6 +366,12 @@ GRANT INSERT (first_commit, git_remote)
 *** common
 #+name: quicklisp-setup
 #+begin_src lisp
+#-asdf
+(load #p"/usr/share/common-lisp/source/asdf/build/asdf.lisp")
+
+#-uiop
+(asdf:load-asd #p"/usr/share/common-lisp/systems/uiop.asd")
+
 #-quicklisp
 (let ((quicklisp-init (merge-pathnames "code/lisp/quicklisp/setup.lisp"
                                        (user-homedir-pathname))))
@@ -609,6 +615,34 @@ there is a problem finding the database connection? Pretty sure that is a bug on
 # resolution code in order to debug in slime. Sigh async emacs.
 
 *** deployment
+**** ccl
+Can't use =:native= on linux, only on darwin.
+
+#+name: git-share-ccl
+#+begin_src sh :shebang "#!/usr/bin/env sh" :tangle ./bin/git-share-ccl
+ccl -I "${0}.image"
+#+end_src
+
+#+name: &build-image-ccl
+#+begin_src lisp :noweb yes
+<<quicklisp-setup>>
+(push (uiop:truenamize #p"~/git/<<project-name-base()>>") ql:*local-project-directories*)
+(ql:quickload :<<project-name-base()>>/bootstrap-image)
+(pop ql:*local-project-directories*)
+(save-application "bin/git-share-ccl.image" :toplevel-function #'main :native nil)
+#+end_src
+
+#+name: build-image-ccl
+#+header: :shebang "#!/usr/bin/env sh"
+#+begin_src sh :noweb yes :tangle ./bin/build-image-ccl :mkdirp yes
+read -r -d '' CODE <<'EOF'
+<<&build-image-ccl>>
+EOF
+CODE_PATH=$(mktemp)
+echo "${CODE}" > "${CODE_PATH}"
+/usr/bin/env -S ccl --no-init --load "${CODE_PATH}"
+rm "${CODE_PATH}"
+#+end_src
 **** SLaD
 So. Of all the many ways that one can try to package this thing to run
 this is the one that amuses me the most deeply. 15mb. Sure you need a
@@ -627,6 +661,7 @@ Obviously a tradeoff in there somewhere, but seriously wow.
 <<quicklisp-setup>>
 (push (uiop:truenamize #p"~/git/<<project-name-base()>>") ql:*local-project-directories*)
 (ql:quickload :<<project-name-base()>>/bootstrap-image)
+(pop ql:*local-project-directories*)
 (save-lisp-and-die "bin/git-share-sbcl" :toplevel #'main :executable t :compression t)
 #+end_src
 
@@ -848,7 +883,7 @@ compiler has no idea that those files are needed.
 #+end_src
 
 #+begin_src lisp
-#+ecl
+,#+ecl
 (progn
 (require 'cmp)
 (c:build-program "somewhere-else" "test-ecl.lisp")
@@ -1280,6 +1315,8 @@ git-share-all () {
     (concat
      "\nsbcl build:\n"
      (run-command "build-image-sbcl")
+     "\nccl build:\n"
+     (run-command "build-image-ccl")
      "\necl build:\n"
      (run-command "build-image-ecl"))))
 
