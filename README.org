@@ -390,7 +390,8 @@ GRANT INSERT (first_commit, git_remote)
 
 (defpackage #:parse-args
   (:use :cl)
-  (:export #:parse-args))
+  (:export #:parse-args
+           #:cli-gen))
 
 ,#+()
 (defpackage #:<<project-name-base()>>/daemon
@@ -491,7 +492,7 @@ GRANT INSERT (first_commit, git_remote)
          (sl (and (keywordp kw) (string-downcase (symbol-name kw))))
          (subcmd? (not (keywordp kw)))
          (assign? (and (not subcmd?) (cdr element)))
-         (real-assign (if bind? (car bind?) (if subcmd? kw (intern sl))))
+         (real-assign (if bind? (car bind?) (if subcmd? kw (intern sl 'parse-args))))
          (default (if assign? (car assign?) assign?)) ; FIXME
          (p (if assign?
                 `(progn (setf ,real-assign (norm-arg (cadr args)))
@@ -502,7 +503,7 @@ GRANT INSERT (first_commit, git_remote)
                         (setf args (cdr args))))))
     (declare (ignore _))
     (list `(,real-assign ,default)  ; default
-          `(,(if subcmd? kw (intern (format nil "--~a" sl))) ,p)  ; case
+          `(,(if subcmd? kw (intern (format nil "--~a" sl) 'parse-args)) ,p)  ; case
           `(cons ',real-assign ,real-assign))))
 
 (defmacro parse-args (&body keywords)
@@ -527,7 +528,7 @@ For example
            ,@defaults)
        (do ()
            ((null args) nil)
-         (case (intern (car args))
+         (case (intern (car args) 'parse-args)
            ,@cases
            (otherwise (progn (format *standard-output* "unhandled: ~s~%" (car args))
                              (setf args (cdr args))))))
@@ -551,7 +552,7 @@ For example
            ,@defaults)
        (do ()
            ((null args) nil)
-         (case (intern (car args))
+         (case (intern (car args) 'parse-args)
            ,@cases
            (otherwise (progn (format *standard-output* "unhandled: ~s~%" (car args))
                              (setf args (cdr args))))))
