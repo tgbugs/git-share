@@ -403,6 +403,23 @@ GRANT INSERT (first_commit, git_remote)
 ))
 #+end_src
 
+#+name: parse-args-asd
+#+header: :eval never
+#+begin_src lisp :noweb yes :tangle (when (boundp '*-gsell-*) "./parse-args.asd")
+(in-package :cl-user)
+(defpackage :parse-args-asd (:use #:cl #:asdf))
+(in-package :parse-args-asd)
+(defsystem parse-args
+  :version "0.0.1"
+  :author "Tom Gillespie <tgbugs@gmail.com>"
+  :license "GPL2"  ; match the git license need to check compat with other things here
+  :description "stupidly simple command line argument parsing"
+  :components ((:module "src"
+                :serial t
+                :components ((:file "package")
+                             (:file "parse-args")))))
+#+end_src
+
 #+name: project-asd
 #+header: :eval never
 #+begin_src lisp :noweb yes :tangle (when (boundp '*-gsell-*) (format "./%s" (project-name ".asd")))
@@ -464,27 +481,60 @@ GRANT INSERT (first_commit, git_remote)
   (let ((int (ignore-errors (parse-integer arg))))
     (if int int arg)))
 
-(defun process-keyword (element)
-  (when (not (listp element))
-    (error (format nil "~s not a list!" element)))
-  (let* ((kw (car element))
-         (sl (string-downcase (symbol-name kw)))
-         (assign (cdr element))  ; FIXME default? FIXME XXX empty vs explicit nil
-         ;;(real-assign (if assign (car assign) (intern (symbol-name kw))))
-         (real-assign (intern (symbol-name kw)))
-         (default (if assign (car assign) assign)) ; FIXME
-         (p (if assign
+(defun process-bind-keyword (bind-keyword)
+  (let* ((kw-or-element? (car bind-keyword))
+         (bind? (if (symbolp kw-or-element?) nil (cdr bind-keyword)))
+         (element (if (symbolp kw-or-element?) bind-keyword kw-or-element?))
+         (_ (unless (listp element)
+              (error (format nil "~s not a list!" element))))
+         (kw (car element))
+         (sl (and (keywordp kw) (string-downcase (symbol-name kw))))
+         (subcmd? (not (keywordp kw)))
+         (assign? (and (not subcmd?) (cdr element)))
+         (real-assign (if bind? (car bind?) (if subcmd? kw (intern sl))))
+         (default (if assign? (car assign?) assign?)) ; FIXME
+         (p (if assign?
                 `(progn (setf ,real-assign (norm-arg (cadr args)))
                         ;; equivalent of bash shift shift
                         (setf args (cddr args)))
                 `(progn (setf ,real-assign t)
                         ;; equivalent of bash shift
                         (setf args (cdr args))))))
+    (declare (ignore _))
     (list `(,real-assign ,default)  ; default
-          `(,(intern (format nil "--~a" sl)) ,p)  ; case
+          `(,(if subcmd? kw (intern (format nil "--~a" sl))) ,p)  ; case
           `(cons ',real-assign ,real-assign))))
 
 (defmacro parse-args (&body keywords)
+  `(ow-cli-gen ,keywords parsed))
+
+(defmacro cli-gen (bind-keywords &rest body) ; (ref:cli-gen)
+  "All the machinery needed for simple cli specification.
+
+BIND-KEYWORDS follow a reverse let pattern because if the name to
+bind is not specified then it is the `ow-keyword-name' of the keyword
+used to specify the command line option.
+
+For example
+((:option default)) -> --option value -> (let ((option \"value\")) )
+((:option default) option-internal) -> --option value -> (let ((option-internal \"value\")) )"
+  ;; FIXME ambiguity between (:option bind-to-name) and ((:option) bind-to-name)
+  ;;(declare (indent 2) (indent 1))
+  (destructuring-bind (defaults cases returns)
+      (apply #'mapcar #'list
+             (mapcar #'process-bind-keyword bind-keywords))
+    `(let ((args (cdr (uiop:raw-command-line-arguments)))
+           ,@defaults)
+       (do ()
+           ((null args) nil)
+         (case (intern (car args))
+           ,@cases
+           (otherwise (progn (format *standard-output* "unhandled: ~s~%" (car args))
+                             (setf args (cdr args))))))
+       (let (cases returns (parsed (list ,@returns)))
+         ,@body))))
+
+(defmacro parse-args-old (&body keywords)
   "(parse-args (:port port) (:pid pid) (:flag))
 
    NOTE if the default value if a kwarg is nil rather than
