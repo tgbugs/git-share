@@ -1,4 +1,4 @@
-# -*- orgstrap-cypher: sha256; orgstrap-norm-func-name: orgstrap-norm-func--dprp-1-0; orgstrap-block-checksum: 1ada98c5818a0b6c88201b2c3406482c1f56fd9d620ec808dfa1c47f38f18a97; -*-
+# -*- orgstrap-cypher: sha256; orgstrap-norm-func-name: orgstrap-norm-func--dprp-1-0; orgstrap-block-checksum: 878322fdf6e6bf2b285c250ac1d966ffc76dfa71310160839a76c736933dce02; -*-
 # [[orgstrap][jump to the orgstrap block for this file]]
 #+TITLE: git-share a git repository resolver
 
