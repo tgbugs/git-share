@@ -135,7 +135,7 @@ org-babel-exp-do-export
 #+begin_src emacs-lisp :exports none :var reset=(identity nil)
 (when (or (not (boundp '--git-share-elisp-loaded)) (and (boundp 'reset) reset))
 (defvar *-gsell-* t)
-(defun project-name (&optional suffix)
+(defun --project-name (&optional suffix)
   "project name without - separator"
   (format "%s%s" "<<project-name-base()>>" (or suffix "")))
 (defun project-name-base (suffix)
@@ -437,7 +437,7 @@ GRANT INSERT (first_commit, git_remote)
 
 #+name: project-asd
 #+header: :eval never
-#+begin_src lisp :noweb yes :tangle (when (boundp '*-gsell-*) (format "./%s" (project-name ".asd")))
+#+begin_src lisp :noweb yes :tangle (when (boundp '*-gsell-*) (format "./%s" (--project-name ".asd")))
 (in-package :cl-user)
 (defpackage :<<project-name-base()>>-asd
             (:use #:cl #:asdf))
