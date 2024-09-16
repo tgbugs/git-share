@@ -1,6 +1,20 @@
-# -*- orgstrap-cypher: sha256; orgstrap-norm-func-name: orgstrap-norm-func--dprp-1-0; orgstrap-block-checksum: 27919bdc1375cd0c0e217f6b75937e3edab3a5c41dede8418738e6777cee13f6; -*-
+# -*- orgstrap-cypher: sha256; orgstrap-norm-func-name: orgstrap-norm-func--dprp-1-0; orgstrap-block-checksum: 1ada98c5818a0b6c88201b2c3406482c1f56fd9d620ec808dfa1c47f38f18a97; -*-
 # [[orgstrap][jump to the orgstrap block for this file]]
 #+TITLE: git-share a git repository resolver
+
+#+name: orgstrap-shebang
+#+begin_src bash :eval never :results none :exports none
+{ __p=$(mktemp -d);touch ${__p}/=;chmod +x ${__p}/=;__op=$PATH;PATH=${__p}:$PATH;} > ${null="/dev/null"}
+$file= $MyInvocation.MyCommand.Source
+$ErrorActionPreference= "silentlycontinue"
+file=$0
+args=$@
+$ErrorActionPreference= "Continue"
+{ PATH=$__op;rm ${__p}/=;rmdir ${__p};} > $null
+emacs -batch -no-site-file -eval "(let (vc-follow-symlinks) (defun orgstrap--confirm-eval (l _) (not (memq (intern l) '(elisp emacs-lisp)))) (let ((file (pop argv)) enable-local-variables) (find-file-literally file) (end-of-line) (when (eq (char-before) ?\^m) (let ((coding-system-for-read 'utf-8)) (revert-buffer nil t t)))) (let ((enable-local-eval t) (enable-local-variables :all) (major-mode 'org-mode)) (require 'org) (org-set-regexps-and-options) (hack-local-variables)))" "${file}" -- $args
+exit
+<# powershell open
+#+end_src
 
 # FIXME this needs to be called before tangling can continue ... how safely ...
 #+call: def-project-name-base() :var reset=(identity nil)
@@ -545,7 +559,7 @@ For example
   ;;(print (apply #'mapcar #'list (map 'list #'pk keywords)))
   ;;(format *standard-output* "~s~%" keywords)
   ;;`(,@keywords)
-  `(quote ,keywords)
+  ;;`(quote ,keywords)
   (destructuring-bind (defaults cases returns)
       (apply #'mapcar #'list (map 'list #'process-keyword keywords))
     `(let ((args (cdr (uiop:raw-command-line-arguments)))
@@ -575,7 +589,7 @@ how-to-use-multiple-arguments-for-awk-with-a-shebang-i-e>
                                              (:flag)))
 (format t "~s~%" *compile-file-truename*)
 (format t "~s~%" *compile-file-pathname*)
-#+()
+,#+()
 (print (macroexpand '(parse-args (:flag) (:asdf 123))))
 #+end_src
 
@@ -591,7 +605,7 @@ how-to-use-multiple-arguments-for-awk-with-a-shebang-i-e>
                                              (:flag)))
 (format t "~s~%" *compile-file-truename*)
 (format t "~s~%" *compile-file-pathname*)
-#+()
+,#+()
 (print (macroexpand '(parse-args (:flag) (:asdf 123))))
 #+end_src
 
@@ -1304,9 +1318,11 @@ git-share-local () {
 }
 
 git-share-first-commit () {
-    FC=$(git rev-list --max-parents=0 HEAD)
+    FCS=$(git rev-list --max-parents=0 HEAD)
     for remote in $(git remote get-url --all origin); do
-        curl -X POST "http://localhost:4242/git/${FC}?remote=${remote}"
+        for FC in ${FCS}; do
+            curl -X POST "http://localhost:4242/git/${FC}?remote=${remote}"
+        done
     done
     # TODO always push to the local git-share instance first (sigh c)
     # and that will then deal with connecting to federated servers
@@ -1323,46 +1339,65 @@ git-share-all () {
 #+begin_src elisp :lexical yes :noweb yes :results none
 <<def-project-name-base>>
 
-(defvar orgstrap-do-tangle nil "Override this for emacs --batch")
+(defvar ow-do-tangle nil "Override this for emacs --batch")
 
-(defvar orgstrap-do-build nil "Override this for emacs --batch")
+(defvar ow-do-build nil "Override this for emacs --batch")
 
-(defvar orgstrap-do-packages-system nil
+(defvar ow-do-packages-system nil
   "Install system packages.")
 
-(defvar orgstrap-do-packages-emacs nil
+(defvar ow-do-packages-emacs nil
   "Install Emacs packages.")
 
 ;; minimal reval
 
 (unless (featurep 'reval)
-  (defun reval-minimal (cypher checksum path-or-url &rest _alts)
-    (let ((o url-handler-mode))
+  (defvar reval-cache-directory (concat user-emacs-directory "reval/cache/"))
+  (defun reval-minimal (cypher checksum path-or-url &rest alternates)
+    "Simplified and compact implementation of reval."
+    (let* (done (o url-handler-mode) (csn (symbol-name checksum))
+           (cache-path (concat reval-cache-directory (substring csn 0 2) "/" csn
+                               "-" (file-name-nondirectory path-or-url))))
       (url-handler-mode)
       (unwind-protect
-          (when (file-exists-p path-or-url)
-            (let* ((buffer (find-file-noselect path-or-url))
-                   (buffer-checksum (intern (secure-hash cypher buffer))))
-              (if (eq buffer-checksum checksum)
-                  (eval-buffer buffer)
-                (kill-buffer buffer)
-                (error "reval: checksum mismatch! %s" path-or-url))))
+          (cl-loop
+           for path-or-url in (cons cache-path (cons path-or-url alternates)) do
+           (when (file-exists-p path-or-url)
+             (let* ((buffer (find-file-noselect path-or-url))
+                    (buffer-checksum (intern (secure-hash cypher buffer))))
+               (if (eq buffer-checksum checksum)
+                   (progn
+                     (unless (string= path-or-url cache-path)
+                       (let ((parent-path (file-name-directory cache-path))
+                             make-backup-files)
+                         (unless (file-directory-p parent-path)
+                           (make-directory parent-path t))
+                         (with-current-buffer buffer
+                           (write-file cache-path))))
+                     (eval-buffer buffer)
+                     (setq done t))
+                 (kill-buffer buffer) ; kill so cannot accidentally evaled
+                 (error "reval: checksum mismatch! %s" path-or-url))))
+           until done)
         (unless o
           (url-handler-mode 0)))))
-  (defalias 'reval #'reval-minimal))
+  (defalias 'reval #'reval-minimal)
+  (reval 'sha256 '3620321396c967395913ff19ce507555acb92335b0545e4bd05ec0e673a0b33b
+         "https://raw.githubusercontent.com/tgbugs/orgstrap/300b1d5518af53d76d950097bcbcd7046cfa2285/reval.el"))
 
 ;; ow
 
 (unless (featurep 'ow-min)
-  (reval 'sha256 '3282d9328e05a12595ffc13e5afbeb3b3a76f1e3c45d50a53df39c2afd6ca341 "https://raw.githubusercontent.com/tgbugs/orgstrap/1e1fa08f9c1c059b393f737fcf19b55082bf660/ow-min.el"))
+  (reval 'sha256 '3282d9328e05a12595ffc13e5afbeb3b3a76f1e3c45d50a53df39c2afd6ca341
+         "https://raw.githubusercontent.com/tgbugs/orgstrap/1e1fa08f9c1c059b393f737fcf19b55082bf660/ow-min.el"))
 
 ;; local defuns
 
 (defun orgstrap---make ()
   "local function to run any extra steps required to build outputs"
   (let ((exec-path
-         (cons (concat default-directory "bin")
-               exec-path)))
+	     (cons (concat default-directory "bin")
+	           exec-path)))
     (concat
      "\nsbcl build:\n"
      (run-command "build-image-sbcl")
@@ -1412,29 +1447,47 @@ My general advice would be to specify system dependencies using the native
 tooling for each package manager that you want to support. I suggest using
 get-emacs.el.sh.ps1 as the basis for this since it can be run as root.
 "
-)
+  )
+
+(defun orgstrap---packages ()
+  "nothing doing")
+
 ;; system packages go first in case elisp packages depend on them
-(when orgstrap-do-packages-system
+(when ow-do-packages-system
   (orgstrap---system))
 
-(when (or orgstrap-do-packages-system orgstrap-do-packages-emacs)
+(when (or ow-do-packages-system ow-do-packages-emacs)
   (orgstrap---packages))
 
-(when (or orgstrap-do-tangle orgstrap-do-build)
+(when (or ow-do-tangle ow-do-build)
   (org-babel-tangle)
-  (when orgstrap-do-build
+  (when ow-do-build
     (orgstrap---make)))
 
 ;; TODO org-babel-do-load-languages
 (unless (alist-get 'lisp org-babel-load-languages)
   (org-babel-do-load-languages
    'org-babel-load-languages
-   '((lisp . t))))
+   (append
+    org-babel-load-languages
+    '((lisp . t)))))
 
 ;; TODO slime (needs reval) have to set inferior lisp etc
 (condition-case nil
-  (require 'slime)
+    (unless (cl-some #'featurep '(slime sly))
+      (require 'slime))
   (error (package-install 'slime)))
+
+(when noninteractive
+  ;;(load "~/git/NOFORK/org-mode/lisp/ob-core.el")
+  (require 'ob-core)
+  (let ((org-confirm-babel-evaluate-cell (lambda (cell) (message "%s" cell) nil)) ; SIGH
+        (tangle (member "tangle" argv)))
+    (when tangle
+      (let (enable-local-eval)
+        (revert-buffer nil t nil)
+        (setq-local find-file-literally nil)
+        (org-babel-tangle)))))
 #+end_src
 
 #+name: orgstrap-system
@@ -1445,8 +1498,9 @@ id
 #+RESULTS:
 | uid=0(root) gid=0(root) groups=0(root) | 1(bin) | 2(daemon) | 3(sys) | 4(adm) | 6(disk) | 10(wheel) | 11(floppy) | 26(tape) | 27(video) |
 
-** Local Variables :ARCHIVE:
+** Local Variables
 
+# close powershell comment #>
 # Local Variables:
-# eval: (progn (setq-local orgstrap-min-org-version "8.2.10") (let ((a (org-version)) (n orgstrap-min-org-version)) (or (fboundp #'orgstrap--confirm-eval) (not n) (string< n a) (string= n a) (error "Your Org is too old! %s < %s" a n))) (defun orgstrap-norm-func--dprp-1-0 (body) (let ((p (read (concat "(progn\n" body "\n)"))) (m '(defun defun-local defmacro defvar defvar-local defconst defcustom)) print-quoted print-length print-level) (cl-labels ((f (b) (cl-loop for e in b when (listp e) do (or (and (memq (car e) m) (let ((n (nthcdr 4 e))) (and (stringp (nth 3 e)) (or (cl-subseq m 3) n) (f n) (or (setcdr (cddr e) n) t)))) (f e))) p)) (prin1-to-string (f p))))) (unless (boundp 'orgstrap-norm-func) (defvar-local orgstrap-norm-func orgstrap-norm-func-name)) (defun orgstrap-norm-embd (body) (funcall orgstrap-norm-func body)) (unless (fboundp #'orgstrap-norm) (defalias 'orgstrap-norm #'orgstrap-norm-embd)) (defun orgstrap-org-src-coderef-regexp (_fmt &optional label) (let ((fmt org-coderef-label-format)) (format "\\([:blank:]*\\(%s\\)[:blank:]*\\)$" (replace-regexp-in-string "%s" (if label (regexp-quote label) "\\([-a-zA-Z0-9_][-a-zA-Z0-9_ ]*\\)") (regexp-quote fmt) nil t)))) (unless (fboundp #'org-src-coderef-regexp) (defalias 'org-src-coderef-regexp #'orgstrap-org-src-coderef-regexp)) (defun orgstrap--expand-body (info) (let ((coderef (nth 6 info)) (expand (if (org-babel-noweb-p (nth 2 info) :eval) (org-babel-expand-noweb-references info) (nth 1 info)))) (if (not coderef) expand (replace-regexp-in-string (org-src-coderef-regexp coderef) "" expand nil nil 1)))) (defun orgstrap--confirm-eval-portable (lang _body) (not (and (member lang '("elisp" "emacs-lisp")) (let* ((body (orgstrap--expand-body (org-babel-get-src-block-info))) (body-normalized (orgstrap-norm body)) (content-checksum (intern (secure-hash orgstrap-cypher body-normalized)))) (eq orgstrap-block-checksum content-checksum))))) (unless (fboundp #'orgstrap--confirm-eval) (defalias 'orgstrap--confirm-eval #'orgstrap--confirm-eval-portable)) (let (enable-local-eval) (vc-find-file-hook)) (let ((ocbe org-confirm-babel-evaluate) (obs (org-babel-find-named-block "orgstrap"))) (if obs (unwind-protect (save-excursion (setq-local orgstrap-norm-func orgstrap-norm-func-name) (setq-local org-confirm-babel-evaluate #'orgstrap--confirm-eval) (goto-char obs) (org-babel-execute-src-block)) (when (eq org-confirm-babel-evaluate #'orgstrap--confirm-eval) (setq-local org-confirm-babel-evaluate ocbe)) (org-set-visibility-according-to-property)) (warn "No orgstrap block."))))
+# eval: (progn (setq-local orgstrap-min-org-version "9.3.8") (let ((a (org-version)) (n orgstrap-min-org-version)) (or (fboundp #'orgstrap--confirm-eval) (not n) (string< n a) (string= n a) (error "Your Org is too old! %s < %s" a n))) (defun orgstrap-norm-func--dprp-1-0 (body) (let ((p (read (concat "(progn\n" body "\n)"))) (m '(defun defun-local defmacro defvar defvar-local defconst defcustom)) print-quoted print-length print-level) (cl-labels ((f (b) (cl-loop for e in b when (listp e) do (or (and (memq (car e) m) (let ((n (nthcdr 4 e))) (and (stringp (nth 3 e)) (or (cl-subseq m 3) n) (f n) (or (setcdr (cddr e) n) t)))) (f e))) p)) (prin1-to-string (f p))))) (unless (boundp 'orgstrap-norm-func) (defvar-local orgstrap-norm-func orgstrap-norm-func-name)) (defun orgstrap-norm-embd (body) (funcall orgstrap-norm-func body)) (unless (fboundp #'orgstrap-norm) (defalias 'orgstrap-norm #'orgstrap-norm-embd)) (defun orgstrap--confirm-eval-minimal (lang body) (not (and (member lang '("elisp" "emacs-lisp")) (eq orgstrap-block-checksum (intern (secure-hash orgstrap-cypher (orgstrap-norm body))))))) (unless (fboundp #'orgstrap--confirm-eval) (defalias 'orgstrap--confirm-eval #'orgstrap--confirm-eval-minimal)) (let (enable-local-eval) (vc-find-file-hook)) (let ((ocbe org-confirm-babel-evaluate) (obs (org-babel-find-named-block "orgstrap"))) (if obs (unwind-protect (save-excursion (setq-local orgstrap-norm-func orgstrap-norm-func-name) (setq-local org-confirm-babel-evaluate #'orgstrap--confirm-eval) (goto-char obs) (org-babel-execute-src-block)) (when (eq org-confirm-babel-evaluate #'orgstrap--confirm-eval) (setq-local org-confirm-babel-evaluate ocbe)) (org-set-visibility-according-to-property)) (warn "No orgstrap block."))))
 # End:
