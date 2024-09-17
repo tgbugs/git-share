@@ -1473,10 +1473,11 @@ get-emacs.el.sh.ps1 as the basis for this since it can be run as root.
     '((lisp . t)))))
 
 ;; TODO slime (needs reval) have to set inferior lisp etc
-(condition-case nil
-    (unless (cl-some #'featurep '(slime sly))
-      (require 'slime))
-  (error (package-install 'slime)))
+(unless non-interactive
+  (condition-case nil
+      (unless (cl-some #'featurep '(slime sly))
+        (require 'slime))
+    (error (package-install 'slime))))
 
 (when noninteractive
   ;;(load "~/git/NOFORK/org-mode/lisp/ob-core.el")
